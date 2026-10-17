@@ -260,17 +260,24 @@ def _to_gltf_y_up(mesh):
     return mesh
 
 
-def generate(prompt: str, out: Path) -> dict:
+def generate(prompt: str, out: Path, image: Path | None = None) -> dict:
     import torch
     if not torch.cuda.is_available():
         return {"ok": False, "code": "no_cuda", "message": "no CUDA GPU available"}
     try:
-        image_prompt, report = build_image_prompt(prompt)
-        print("IMAGE_PROMPT " + json.dumps({"prompt": image_prompt, **report}), flush=True)
         _free(torch)
         began = time.perf_counter()
-        images = _text_to_images(image_prompt, torch, candidate_count())
-        lap("sd_turbo", began)
+        if image is not None:
+            # image-to-3D: the user's picture replaces the SD-Turbo stage
+            from PIL import Image
+            images = [Image.open(image).convert("RGB")]
+            image_prompt = f"image:{Path(image).name}"
+            lap("load_image", began)
+        else:
+            image_prompt, report = build_image_prompt(prompt)
+            print("IMAGE_PROMPT " + json.dumps({"prompt": image_prompt, **report}), flush=True)
+            images = _text_to_images(image_prompt, torch, candidate_count())
+            lap("sd_turbo", began)
         try:
             mesh = _image_to_mesh(images, torch, half_precision())
         except FloatingPointError as exc:
@@ -296,15 +303,16 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", action="store_true")
     parser.add_argument("--prompt")
+    parser.add_argument("--image")
     parser.add_argument("--out")
     args = parser.parse_args(argv)
     if args.probe:
         emit(probe())
         return 0
-    if not args.prompt or not args.out:
-        emit({"ok": False, "code": "error", "message": "--prompt and --out are required"})
+    if not (args.prompt or args.image) or not args.out:
+        emit({"ok": False, "code": "error", "message": "--prompt (or --image) and --out are required"})
         return 2
-    result = generate(args.prompt, Path(args.out))
+    result = generate(args.prompt or "", Path(args.out), Path(args.image) if args.image else None)
     emit(result)
     return 0 if result["ok"] else 1
 

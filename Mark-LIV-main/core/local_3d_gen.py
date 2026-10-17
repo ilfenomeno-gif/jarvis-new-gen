@@ -7,6 +7,7 @@ Setup: see requirements-3d.txt and ``python -m core.local_3d_gen setup``.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -99,8 +100,12 @@ def readiness_problem(info: dict) -> str | None:
 
 
 def generate_local(prompt, models_dir: Path | None = None, runner=None,
-                   timeout: float = DEFAULT_TIMEOUT) -> Path:
-    """Blocking: run in a worker thread. Returns the saved .glb path."""
+                   timeout: float = DEFAULT_TIMEOUT, image: Path | None = None) -> Path:
+    """Blocking: run in a worker thread. Returns the saved .glb path.
+
+    With ``image`` (a sanitised PNG from core.image_input) the SD-Turbo stage is skipped and
+    TripoSR reconstructs the picture directly; ``prompt`` then only names the model file.
+    """
     prompt = clean_prompt(prompt)
     models_dir = Path(models_dir or MODELS_DIR)
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +118,8 @@ def generate_local(prompt, models_dir: Path | None = None, runner=None,
     tmp.mkdir(parents=True)
     out_file = tmp / "model.glb"
     try:
-        cmd = [python_exe(), "-m", "core.local_3d_worker", "--prompt", prompt, "--out", str(out_file)]
+        cmd = [python_exe(), "-m", "core.local_3d_worker", "--out", str(out_file)]
+        cmd += ["--image", str(image)] if image else ["--prompt", prompt]
         try:
             code, stdout, stderr = runner(cmd, timeout)
         except subprocess.TimeoutExpired:
@@ -136,7 +142,8 @@ def generate_local(prompt, models_dir: Path | None = None, runner=None,
         with out_file.open("rb") as handle:
             if handle.read(4) != b"glTF":
                 raise RuntimeError("generated file is not a valid .glb")
-        target = models_dir / model_name(prompt)
+        digest = hashlib.sha1(Path(image).read_bytes()).hexdigest() if image else ""
+        target = models_dir / model_name(prompt + digest)
         shutil.move(str(out_file), target)
         return target
     finally:

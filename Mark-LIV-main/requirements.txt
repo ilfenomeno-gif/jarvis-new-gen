@@ -31,7 +31,6 @@ pywin32; sys_platform == "win32"
 qrcode[pil]
 pyttsx3
 keyboard; sys_platform == "win32"
-mediapipe
 opencv-python
 numpy
 python-kasa

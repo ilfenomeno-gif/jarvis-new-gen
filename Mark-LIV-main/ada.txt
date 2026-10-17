@@ -10,10 +10,6 @@ Controllo del Mondo Fisico (Smart Home e Tool Calling):
 - Integrazione Smart Home: Ada è in grado di controllare dispositivi fisici, come le lampade smart Kasa, utilizzando Python.
 - Tool Calling: L'architettura prevede il "tool calling", permettendo all'AI di avere completa autonomia su quando eseguire codice specifico per casi d'uso designati (es. accendere/spegnere luci, eseguire cicli di accensione).
 
-Hand Tracking e Gesture Control:
-- Controllo Gesti: Implementazione di hand tracking e controllo gestuale tramite un modello di visione, che replica il movimento del mouse e le azioni di click/trascinamento.
-- Sensibilità del cursore: Funzionalità aggiunta per controllare la sensibilità del cursore (più veloce o più lento).
-
 Utilità Quotidiana e Automazione Web (Gemini Computer Use):
 - Controllo Browser: Ada ha il controllo completo del browser web tramite il modello "Gemini computer use", che include strumenti per scorrere, cliccare e cercare pagine web.
 - Automazione Autonoma: Il modello esegue screenshot della pagina web per analizzare visivamente e completare task complessi in autonomia (es. navigare su amazon.com e aggiungere articoli al carrello).

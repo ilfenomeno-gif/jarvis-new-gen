@@ -280,13 +280,14 @@ TOOL_DECLARATIONS = [
             "or topics — always prefer this over guessing. "
             "Modes: 'search' (default), 'news' (latest headlines on a topic), "
             "'research' (deep comprehensive answer), 'price' (product cost lookup), "
-            "'compare' (side-by-side comparison of items)."
+            "'compare' (side-by-side comparison of items), 'images' (direct picture links: "
+            "use it to find a photo to turn into a 3D hologram with generate_3d_model image_url)."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "query":  {"type": "STRING", "description": "Search query or topic"},
-                "mode":   {"type": "STRING", "description": "search | news | research | price | compare"},
+                "mode":   {"type": "STRING", "description": "search | news | research | price | compare | images"},
                 "items":  {"type": "ARRAY",  "items": {"type": "STRING"}, "description": "Items to compare (compare mode)"},
                 "aspect": {"type": "STRING", "description": "Comparison aspect: price | specs | reviews | features"},
             },

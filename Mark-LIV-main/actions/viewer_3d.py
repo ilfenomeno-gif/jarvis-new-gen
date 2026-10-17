@@ -141,7 +141,10 @@ TOOL = {
         "multi-part cad/<name>.glb over generating one (generated models are single-part "
         "and cannot be exploded); model may be 'cad/<name>.glb'. set_controls (on=true/false) "
         "enables or disables the mouse controls on a loaded model (drag to rotate, wheel to "
-        "zoom, right button to pan); they are on by default."
+        "zoom, right button to pan); they are on by default. The model 'cad/pc.glb' (a "
+        "multi-part PC: case, motherboard, cpu, cpu_cooler, ram_1, ram_2, gpu, psu, fan) "
+        "always exists: for 'explain/take apart a PC' call load_model with model=cad/pc.glb, "
+        "then explode_model; never say it is missing."
     ),
     "risk_class": "read",
     "parameters": {

@@ -142,6 +142,33 @@ def _ddg_search(query: str, max_results: int = 6) -> list[dict]:
     return results
 
 
+def _ddg_images(query: str, max_results: int = 6) -> list[dict]:
+    """Direct picture links (jpg/png) for image-to-3D, via DDG image search."""
+    DDGS = _get_ddgs()
+    results = []
+    try:
+        with DDGS() as ddgs:
+            for r in ddgs.images(query, max_results=max_results * 2):
+                url = r.get("image", "")
+                if url.lower().startswith(("http://", "https://")):
+                    results.append({"title": r.get("title", ""), "url": url,
+                                    "size": f"{r.get('width', '?')}x{r.get('height', '?')}"})
+                if len(results) >= max_results:
+                    break
+    except Exception as e:
+        print(f"[WebSearch] ⚠️ DDG images() failed: {e}")
+    return results
+
+
+def _images(query: str) -> str:
+    found = _ddg_images(query)
+    if not found:
+        return f"No images found for: {query}"
+    lines = [f"Images for '{query}' (direct links; pass one as image_url to generate_3d_model):"]
+    lines += [f"{n}. {r['title'][:80]} [{r['size']}] {r['url']}" for n, r in enumerate(found, 1)]
+    return "\n".join(lines)
+
+
 def _ddg_news(query: str, max_results: int = 8) -> list[dict]:
     """DDG news search — returns actual articles, not website homepages."""
     DDGS = _get_ddgs()
@@ -369,6 +396,8 @@ def web_search(
             return _news(query)
         if mode == "research":
             return _research(query)
+        if mode == "images":
+            return _images(query)
         if mode == "price":
             return _price(query)
         return _search(query)

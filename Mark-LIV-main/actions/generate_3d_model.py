@@ -8,6 +8,10 @@ from core import model_gen
 
 def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
     params = parameters or {}
+    image_path = str(params.get("image_path") or "").strip()
+    image_url = str(params.get("image_url") or "").strip()
+    if image_path or image_url:
+        return _image_to_3d(params, image_path, image_url, player)
     try:
         prompt = model_gen.clean_prompt(params.get("prompt"))
     except ValueError as exc:
@@ -55,20 +59,64 @@ def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
     return f"Model '{path.name}' generated and saved."
 
 
+def _show_local(player, params, path) -> str:
+    if player is not None and hasattr(player, "viewer3d_call") and params.get("show", True) is not False:
+        # TripoSR textures are blurry: show generated models as a clean solid blueprint.
+        player.viewer3d_call("setMaterialStyle", ["blueprint"])
+        player.viewer3d_call("loadModel", [path.name])
+        return (f"Model '{path.name}' generated from the image and shown in blueprint style (say "
+                "'texture originali' for the realistic material). Drag with the mouse to rotate.")
+    return f"Model '{path.name}' generated from the image and saved."
+
+
+def _image_to_3d(params: dict, image_path: str, image_url: str, player) -> str:
+    """Image-to-3D: TripoSR on the user's picture, skipping SD-Turbo. Local engine only."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from core import image_input, local_3d_gen
+    engine = str(params.get("engine") or "").lower()
+    if engine == "tripo":
+        return "Invalid request: image-to-3D runs only on the local generator (engine 'local' or 'auto')."
+    if not local_3d_gen.is_installed():
+        return "3D generation failed (local engine): " + local_3d_gen.SETUP_MESSAGE
+    work = Path(tempfile.mkdtemp(prefix="jarvis_img3d_"))
+    try:
+        try:
+            image = image_input.prepare_image(image_path or None, image_url or None, work)
+        except ValueError as exc:
+            return f"Invalid request: {exc}"
+        label = str(params.get("prompt") or "").strip() or image_input.label_for(image_path, image_url)
+        try:
+            label = model_gen.clean_prompt(label)
+            path = local_3d_gen.generate_local(label, image=image)
+        except RuntimeError as exc:
+            return f"3D generation failed (local engine): {exc}"
+        except Exception as exc:
+            return f"3D generation failed (local engine): {type(exc).__name__}: {exc}"
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return _show_local(player, params, path)
+
+
 TOOL = {
     "name": "generate_3d_model",
     "description": (
         "Creates a 3D model from a text description (free local GPU generator, or Tripo3D "
         "with API credits; takes up to a few minutes) and shows it as a hologram in the central display. Use when "
         "the user asks to create, build or show something in 3D, e.g. 'make a hologram "
-        "of a jet engine'. Afterwards viewer_3d can explode_model, highlight_part or "
+        "of a jet engine'. Also turns a picture into a hologram (image_path for a local file, "
+        "image_url for a web image): faster, no text-to-image step. Afterwards viewer_3d can explode_model, highlight_part or "
         "clear_model."
     ),
     "risk_class": "write",
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "prompt": {"type": "STRING", "description": "What to create, ideally in English (the image models understand it best), e.g. 'a wooden chair'. Max 300 characters."},
+            "prompt": {"type": "STRING", "description": "What to create, ideally in English (the image models understand it best), e.g. 'a wooden chair'. Max 300 characters. With image_path/image_url it is optional (just a name for the model)."},
+            "image_path": {"type": "STRING", "description": "Image-to-3D: path of a local picture (png/jpg/webp) to turn into a 3D hologram, skipping the text-to-image step (faster). Local generator only."},
+            "image_url": {"type": "STRING", "description": "Image-to-3D: direct http(s) link to a picture (e.g. an image found with web search) to turn into a 3D hologram. Use instead of image_path for web images."},
             "show": {"type": "BOOLEAN", "description": "Show it right away (default true)."},
             "engine": {
                 "type": "STRING",
@@ -80,7 +128,7 @@ TOOL = {
                 ),
             },
         },
-        "required": ["prompt"],
+        "required": [],
     },
     "handler": generate_3d_model,
 }

@@ -53,7 +53,7 @@ GROUPS: tuple[Group, ...] = (
            {"file_controller", "large_file_reader", "file_processor", "clipboard_manager", "gestisci_testo"}),
     _group("desktop", r"clicc|click|digita|scrivi|\btype\b|\btast|\bpress|volume|luminos|brightness|wifi|bluetooth|monitor|desktop|mouse|schermata|finestra|window|scorciatoi|shortcut|gesti|\bmano\b",
            {"desktop_control", "computer_control", "press_key", "computer_settings", "manage_monitor",
-            "accessibility_read_screen", "ada_computer_use", "automation_shortcuts", "hand_tracking"}),
+            "accessibility_read_screen", "ada_computer_use", "automation_shortcuts"}),
     _group("vision", r"schermo|screen|camera|webcam|guarda|\bvedi|\blook|foto|immagine|screenshot|cosa c'?è",
            {"screen_process", "close_camera", "accessibility_read_screen"}),
     _group("browser", r"browser|pagina|\bsito|\bsite|\bweb\b|\burl\b|http|www|google|chrome|edge|youtube|video|netflix|prime|scheda|\btab\b|leggi|cerca|search",

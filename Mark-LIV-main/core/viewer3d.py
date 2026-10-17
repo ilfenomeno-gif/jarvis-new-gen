@@ -32,6 +32,15 @@ MAX_MODEL_BYTES = 40 * 1024 * 1024
 _MODEL_NAME = re.compile(r"^(cad/)?[A-Za-z0-9][A-Za-z0-9_\-. ]{0,100}\.(glb|gltf)$")
 
 
+def _ensure_pc_cad(folder: Path) -> None:
+    """cad/pc.glb is built from code, not downloaded: create it on first use (needs trimesh)."""
+    try:
+        from core.make_pc_cad import make_pc_cad
+        make_pc_cad(folder)
+    except Exception:
+        pass
+
+
 def model_file(name, base: Path | None = None) -> Path:
     """Resolve a model name (plain, or 'cad/<name>') to a file in the models folder, or raise ValueError."""
     base = (base or MODELS_DIR).resolve()
@@ -41,6 +50,8 @@ def model_file(name, base: Path | None = None) -> Path:
     path = (base / name).resolve()
     if path.parent not in (base, base / "cad"):
         raise ValueError("model must be inside the models folder")
+    if not path.is_file() and name == "cad/pc.glb":
+        _ensure_pc_cad(base / "cad")
     if not path.is_file():
         raise ValueError(f"model '{name}' not found in the models folder")
     if path.stat().st_size > MAX_MODEL_BYTES:
@@ -52,6 +63,8 @@ def list_models(base: Path | None = None) -> dict[str, list[str]]:
     """Model names available to loadModel: generated ones and pre-downloaded CAD ones."""
     base = (base or MODELS_DIR).resolve()
     out = {"generated": [], "cad": []}
+    if not (base / "cad" / "pc.glb").is_file():
+        _ensure_pc_cad(base / "cad")
     for key, folder, prefix in (("generated", base, ""), ("cad", base / "cad", "cad/")):
         if folder.is_dir():
             out[key] = sorted(
