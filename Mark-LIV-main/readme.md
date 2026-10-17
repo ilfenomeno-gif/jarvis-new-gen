@@ -4,6 +4,10 @@ Assistente personale AI per desktop, progettato per ascoltare comandi vocali, co
 
 Questo repository contiene una versione personalizzata di JARVIS basata su Python, Gemini Live API e una HUD desktop in PyQt6. Il progetto unisce conversazione vocale in tempo reale, automazione del sistema operativo, memoria persistente, controllo del browser, strumenti per file e giochi e un dashboard remoto locale.
 
+Questa app è un componente del repository multi-progetto
+[jarvis-new-gen](../README.md); per la mappa completa, GEV, ASTRALIS e le
+licenze, consulta il README e [LICENSES.md](../LICENSES.md) della root.
+
 ## Cosa fa
 
 - Conversazione vocale bidirezionale con input da microfono e risposta audio.
@@ -46,8 +50,8 @@ tests/                  Test automatici dei contratti di automazione
 ## Installazione
 
 ```bash
-git clone https://github.com/ilfenomeno-gif/jarvis-mio.git
-cd jarvis-mio
+git clone https://github.com/ilfenomeno-gif/jarvis-new-gen.git
+cd jarvis-new-gen/Mark-LIV-main
 python -m venv .venv
 ```
 
@@ -115,7 +119,7 @@ In alternativa, `python setup.py` installa le dipendenze, prepara Playwright e v
 Eseguire i test automatici con:
 
 ```bash
-python -m unittest discover -s tests -v
+python -m pytest -q
 ```
 
 Per verificare la sintassi dell'intero progetto:
@@ -143,7 +147,7 @@ Le hotkey globali non vengono attivate automaticamente all'avvio. Per NVDA e nec
 - [Piano tecnico e diagnostica](PIANO_TECNICO_JARVIS.md)
 - [Profili prompt](core/prompts/)
 - [Template per plugin](plugins/_template.py)
-- [Test di automazione](tests/test_automation_contracts.py)
+- [Suite di test](tests/)
 
 ## Stato del progetto
 
