@@ -45,7 +45,6 @@ from core.animations import ScanlineOverlay, start_pulsing_glow
 from core.page_reader import PageSpeechWorker, build_page_read_script
 from core.browser_url import is_allowed_http_scheme, normalize_http_url
 from gemini_chat_window import GeminiChatPanel, GeminiChatWindow
-from core.avatar import HoloAvatar
 
 _GEV_URL = "http://127.0.0.1:4173/?ui=panels"
 _GEV_LAYERS = {
@@ -432,7 +431,6 @@ class HudCanvas(QWidget):
         self._face_px: QPixmap | None = None
         self._load_face(face_path)
         
-        self._holo_avatar = HoloAvatar()
         self._last_step_t = time.monotonic()
 
         # Live audio reactivity: _live_amp is written from the audio threads
@@ -510,7 +508,6 @@ class HudCanvas(QWidget):
         
         dt = now - getattr(self, '_last_step_t', now)
         self._last_step_t = now
-        self._holo_avatar.step(dt, amp, speaking=self.speaking, muted=self.muted)
 
         # Slow "breathing" base target (random shimmer), refreshed on a timer.
         if not self.reduced_motion and now - self._last_t > (
@@ -715,10 +712,6 @@ class HudCanvas(QWidget):
         for bx, by, dx, dy in [(hl,ht,1,1),(hr,ht,-1,1),(hl,hb,1,-1),(hr,hb,-1,-1)]:
             p.drawLine(QPointF(bx, by), QPointF(bx + dx * bl, by))
             p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * bl))
-
-        # face
-        r_avatar = int(fw * 0.42 * self._scale)
-        self._holo_avatar.paint(p, cx, cy, r_avatar, qcol(state_color), qcol(accent_color), qcol(C.BG))
 
         # particles
         for pt in self._particles:

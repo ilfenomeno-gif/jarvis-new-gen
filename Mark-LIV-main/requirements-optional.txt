@@ -1,0 +1,4 @@
+# Dipendenze opzionali: non servono per l'uso base.
+# Dettatura offline (Whisper su CTranslate2). Il modello va scaricato una volta
+# con rete, oppure messo in cache prima dell'uso offline.
+faster-whisper>=1.0,<2

@@ -172,3 +172,19 @@ def test_dictation_discard_drops_audio_without_returning_a_transcript_buffer():
     assert not capture.is_recording
     assert capture._frames == []
     assert capture._sample_count == 0
+
+
+def test_set_dictation_refuses_before_recording_when_whisper_missing(monkeypatch):
+    import main
+    import core.stt as stt
+
+    monkeypatch.setattr(stt, "whisper_available", lambda: False)
+    logs, started = [], []
+    self = SimpleNamespace(
+        ui=SimpleNamespace(write_log=logs.append, muted=False),
+        _dictation_capture=SimpleNamespace(start=lambda: started.append(1)),
+    )
+
+    assert main.JarvisLive._set_dictation(self, True) is False
+    assert not started
+    assert "faster-whisper" in logs[0]

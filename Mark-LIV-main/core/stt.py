@@ -9,6 +9,18 @@ import threading
 import numpy as np
 
 
+def whisper_available() -> bool:
+    """True when faster-whisper is importable (checked without loading it)."""
+    import importlib.util
+    return importlib.util.find_spec("faster_whisper") is not None
+
+
+WHISPER_MISSING_MESSAGE = (
+    "Offline dictation is unavailable: install the optional package "
+    "'faster-whisper' (pip install -r requirements-optional.txt)."
+)
+
+
 class WhisperSTT:
     """Offline transcription using faster-whisper."""
 

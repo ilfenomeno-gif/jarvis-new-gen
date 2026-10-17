@@ -1064,6 +1064,10 @@ class JarvisLive:
 
     def _set_dictation(self, enabled: bool) -> bool:
         if enabled:
+            from core.stt import whisper_available, WHISPER_MISSING_MESSAGE
+            if not whisper_available():
+                self.ui.write_log(f"ERR: {WHISPER_MISSING_MESSAGE}")
+                return False
             with self._speaking_lock:
                 jarvis_speaking = self._is_speaking
             if jarvis_speaking or self.ui.muted or self._phone_active:
