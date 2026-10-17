@@ -42,6 +42,7 @@ from core.browser_interaction import (
     normalize_link_text, normalize_web_key,
 )
 from core.animations import ScanlineOverlay, start_pulsing_glow
+from core.ui_panels import PanelState
 from core.page_reader import PageSpeechWorker, build_page_read_script
 from core.browser_url import is_allowed_http_scheme, normalize_http_url
 from gemini_chat_window import GeminiChatPanel, GeminiChatWindow
@@ -2653,6 +2654,8 @@ class MainWindow(QMainWindow):
     _dictation_result_sig = pyqtSignal(bool, str)
     _dictation_busy_sig = pyqtSignal(bool)
     _focus_mode_sig = pyqtSignal(bool)
+    _workspace_sig = pyqtSignal(str)
+    _panel_sig = pyqtSignal(str, bool)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -2727,7 +2730,9 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(self._build_header())
+        self._panel_state = PanelState()
+        self._header_panel = self._build_header()
+        root.addWidget(self._header_panel)
         self._title_glow = start_pulsing_glow(
             self._title_lbl, C.PRI, reduced_motion=self._reduced_motion
         )
@@ -2861,7 +2866,8 @@ class MainWindow(QMainWindow):
         body.addWidget(self._right_panel, stretch=0)
 
         root.addLayout(body, stretch=1)
-        root.addWidget(self._build_footer())
+        self._footer_panel = self._build_footer()
+        root.addWidget(self._footer_panel)
 
         # Quick-access drawer (floating overlay, built after central widget layout is done)
         self._quick_drawer = self._build_quick_drawer()
@@ -2892,6 +2898,8 @@ class MainWindow(QMainWindow):
         self._browser_open_sig.connect(self._open_url_in_webview)
         self._browser_close_sig.connect(self.close_browser)
         self._focus_mode_sig.connect(self.set_focus_mode)
+        self._workspace_sig.connect(self.apply_workspace)
+        self._panel_sig.connect(self.set_panel_visible)
         self._browser_key_sig.connect(self._press_key_in_webview)
         self._browser_click_sig.connect(self._click_link_in_webview)
         self._browser_read_page_sig.connect(self._read_page_aloud)
@@ -2939,13 +2947,33 @@ class MainWindow(QMainWindow):
         sc_focus = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
         sc_focus.activated.connect(lambda: self.set_focus_mode(not self._focus_mode))
 
-    _focus_mode = False
+    @property
+    def _focus_mode(self) -> bool:
+        return self._panel_state.workspace == "focus"
 
     def set_focus_mode(self, active: bool) -> None:
-        """Hide both side columns so only the central HUD stays visible."""
-        self._focus_mode = bool(active)
-        self._left_panel.setVisible(not self._focus_mode)
-        self._right_panel.setVisible(not self._focus_mode)
+        """Hide the side columns so only the central HUD stays visible."""
+        self.apply_workspace("focus" if active else "full")
+
+    def apply_workspace(self, name: str) -> None:
+        self._panel_state.apply_workspace(name)
+        self._render_panels()
+
+    def set_panel_visible(self, panel: str, visible: bool) -> None:
+        self._panel_state.set_visible(panel, visible)
+        self._render_panels()
+
+    def _render_panels(self) -> None:
+        widgets = {
+            "header": self._header_panel,
+            "left": self._left_panel,
+            "right": self._right_panel,
+            "content": self._content_panel,
+            "footer": self._footer_panel,
+        }
+        for name, widget in widgets.items():
+            widget.setVisible(self._panel_state.visible(name))
+
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
         self._cam_preview.show_frame(img_bytes)
@@ -5443,6 +5471,16 @@ class JarvisUI:
     def set_focus_mode(self, active: bool) -> None:
         """Thread-safe: callable from tool threads."""
         self._win._focus_mode_sig.emit(bool(active))
+
+    def apply_workspace(self, name: str) -> None:
+        self._win._workspace_sig.emit(str(name))
+
+    def set_panel_visible(self, panel: str, visible: bool) -> None:
+        self._win._panel_sig.emit(str(panel), bool(visible))
+
+    def panel_status(self) -> dict:
+        state = self._win._panel_state
+        return {"workspace": state.workspace, "panels": state.snapshot()}
 
     @property
     def muted(self) -> bool:
