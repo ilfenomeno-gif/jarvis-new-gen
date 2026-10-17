@@ -18,7 +18,7 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 - [x] `discover_actions` collegato a `main.py` (dichiarazioni + dispatch + nomi riservati)
 - [x] Test `tests/test_action_loader.py`
 - [x] Job CI `vscode-extension`
-- [ ] Commit + push + CI remota verde
+- [x] Commit + push + CI remota verde (commit `5dee2ea`, job jarvis/gev/vscode-extension success)
 
 ## Fase 1: Normalizzare i tool
 
@@ -81,4 +81,4 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 
 | Data | Step | Esito |
 |------|------|-------|
-| — | Fase 0 | JARVIS 347 passed; estensione 10 passed (locale); CI remota non ancora eseguita |
+| 2026-10-17 | Fase 0 | JARVIS 347 passed; estensione 10 passed (locale); CI remota su `5dee2ea`: jarvis, gev, vscode-extension tutti success |
