@@ -5392,11 +5392,9 @@ class MainWindow(QMainWindow):
         self._overlay = ov
 
     def _on_setup_done(self, key: str, os_name: str):
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        API_FILE.write_text(
-            json.dumps({"gemini_api_key": key, "os_system": os_name}, indent=4),
-            encoding="utf-8",
-        )
+        from core.api_keys import save_gemini_key
+        if not save_gemini_key(CONFIG_DIR, key, os_name):
+            self._log.append_log("SYS: Secure storage unavailable, key saved in plain config.")
         self._ready = True
         if self._overlay:
             self._overlay.hide()

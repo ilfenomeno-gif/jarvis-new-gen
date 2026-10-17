@@ -64,3 +64,33 @@ def test_migrate_remove_plain_blanks_only_the_key(tmp_path, monkeypatch):
 def test_migrate_without_key_is_an_error(tmp_path):
     store = SecretStore(tmp_path / "secrets.json", FakeBackend())
     assert api_keys.migrate(tmp_path, store).startswith("error:")
+
+
+def test_save_gemini_key_goes_to_store_not_plain(tmp_path):
+    store = SecretStore(tmp_path / "secrets.json", FakeBackend())
+    assert api_keys.save_gemini_key(tmp_path, "new-key", "windows", store) is True
+    assert store.get(api_keys.SECRET_NAME) == "new-key"
+    data = json.loads((tmp_path / "api_keys.json").read_text())
+    assert data == {"gemini_api_key": "", "os_system": "windows"}
+    assert "new-key" not in (tmp_path / "api_keys.json").read_text()
+    assert "new-key" not in (tmp_path / "secrets.json").read_text()
+
+
+def test_save_gemini_key_falls_back_when_store_unavailable(tmp_path):
+    class Broken:
+        def protect(self, data):
+            raise RuntimeError("no backend")
+
+        def unprotect(self, data):
+            raise RuntimeError("no backend")
+
+    store = SecretStore(tmp_path / "secrets.json", Broken())
+    assert api_keys.save_gemini_key(tmp_path, "k", "linux", store) is False
+    assert json.loads((tmp_path / "api_keys.json").read_text())["gemini_api_key"] == "k"
+
+
+def test_save_gemini_key_preserves_other_settings(tmp_path):
+    (tmp_path / "api_keys.json").write_text(json.dumps({"assistant_name": "X"}))
+    store = SecretStore(tmp_path / "secrets.json", FakeBackend())
+    api_keys.save_gemini_key(tmp_path, "k", "windows", store)
+    assert json.loads((tmp_path / "api_keys.json").read_text())["assistant_name"] == "X"

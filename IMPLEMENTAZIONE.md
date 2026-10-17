@@ -33,7 +33,7 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 ## Fase 2: Sicurezza
 
 - [x] `SecretStore` (`core/secret_store.py`): DPAPI Windows, nessun fallback in chiaro, backend iniettabile
-- [x] Migrare `config/api_keys.json` nel `SecretStore`: `core/api_keys.py` (SecretStore prima, file in chiaro come fallback), lettori collegati, comando `python -m core.registry_cli migrate-api-key [--remove-plain]`; test in `tests/test_api_keys.py`. Resta all'utente eseguire la migrazione sulla propria macchina. Il setup della UI scrive ancora in chiaro la chiave inserita (non migrato)
+- [x] Migrare `config/api_keys.json` nel `SecretStore`: `core/api_keys.py` (SecretStore prima, file in chiaro come fallback), lettori collegati, comando `python -m core.registry_cli migrate-api-key [--remove-plain]`; test in `tests/test_api_keys.py`. Resta all'utente eseguire la migrazione sulla propria macchina. La schermata di setup della UI ora scrive nel `SecretStore` (`save_gemini_key`), con fallback in chiaro e avviso nel log solo se DPAPI non è disponibile; la prova grafica della schermata non è stata eseguita (verificati logica, test e compilazione di `ui.py`)
 - [x] `ScopeManager` (`core/connectors.py`): scope dichiarati nel descrittore, concessi dall'utente, verificati a ogni chiamata
 - [x] Whitelist `node`: il plugin GEV invoca solo il `node.exe` portatile atteso (controllo già in `gev_plugin.py`); la whitelist generale in `guardrails.py` resta perché `code_helper` esegue `.js`
 - [x] Audit log JSONL (`core/audit_log.py`) con redazione di token/segreti negli argomenti
@@ -92,3 +92,4 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 | 2026-10-17 | Fasi 1-6 | JARVIS 366 passed; estensione 11 passed + `npm ci --dry-run` ok; `py_compile main.py` ok; DPAPI roundtrip reale ok; trasporto HTTP provato contro un server locale di prova |
 | 2026-10-17 | `verifica.py` | 40/40 controlli OK in locale (suite completa inclusa) |
 | 2026-10-17 | Chiave Gemini nel SecretStore | JARVIS 372 passed; roundtrip DPAPI reale con `--remove-plain` su cartella temporanea ok || 2026-10-17 | Migrazione 5 tool in registry | JARVIS 372 passed; registry carica 13 azioni; esecuzione reale di large_file_reader e proxy_launcher via registry ok |
+| 2026-10-17 | Setup UI nel SecretStore | JARVIS 375 passed; py_compile ui.py ok; schermata non provata graficamente |

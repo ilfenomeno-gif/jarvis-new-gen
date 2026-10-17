@@ -42,6 +42,33 @@ def gemini_api_key(config_dir: Path | None = None) -> str:
     return _read_plain(config_dir)
 
 
+def save_gemini_key(config_dir: Path, key: str, os_name: str,
+                    store: SecretStore | None = None) -> bool:
+    """Persist the key from the setup screen. Returns True when it went into the
+    SecretStore; False when no secure backend exists and it was written to
+    api_keys.json as before."""
+    config_dir = Path(config_dir)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    path = config_dir / "api_keys.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    data["os_system"] = os_name
+    secured = False
+    try:
+        store = store or SecretStore(config_dir / "secrets.json")
+        store.set(SECRET_NAME, key)
+        secured = store.get(SECRET_NAME) == key
+    except Exception:
+        secured = False
+    data["gemini_api_key"] = "" if secured else key
+    path.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    return secured
+
+
 def migrate(config_dir: Path | None = None, store: SecretStore | None = None,
             remove_plain: bool = False) -> str:
     """Copy the plain-text key into the SecretStore. With ``remove_plain`` the
