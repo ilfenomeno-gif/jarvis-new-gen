@@ -212,6 +212,39 @@ def test_gev_checkout_is_deterministic_from_plugin_location():
     )
 
 
+def test_dependency_install_uses_tracked_lockfile_and_npm_ci(tmp_path, monkeypatch):
+    (tmp_path / "package-lock.json").touch()
+    monkeypatch.setattr(gev_plugin, "GEV_DIR", tmp_path)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return type("CompletedProcess", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(gev_plugin.subprocess, "run", fake_run)
+
+    gev_plugin._install_gev_dependencies({"PATH": "test"}, "portable-node", "npm-cli")
+
+    assert len(calls) == 1
+    command, options = calls[0]
+    assert command == ["portable-node", "npm-cli", "ci"]
+    assert options["cwd"] == tmp_path
+    assert options["env"] == {"PATH": "test"}
+    assert options["timeout"] == gev_plugin.INSTALL_TIMEOUT_SEC
+
+
+def test_dependency_install_fails_clearly_without_lockfile(tmp_path, monkeypatch):
+    monkeypatch.setattr(gev_plugin, "GEV_DIR", tmp_path)
+    monkeypatch.setattr(
+        gev_plugin.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("must not install without a lockfile"),
+    )
+
+    with pytest.raises(FileNotFoundError, match="package-lock.json non trovato"):
+        gev_plugin._install_gev_dependencies({}, "portable-node", "npm-cli")
+
+
 def test_start_runtime_reuses_healthy_existing_server_without_owning_it(
     isolated_gev_runtime, monkeypatch
 ):

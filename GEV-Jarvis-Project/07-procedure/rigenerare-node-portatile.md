@@ -17,8 +17,20 @@ $archive = Join-Path $env:TEMP "node-$version-win-x64.zip"
 $extract = Join-Path $env:TEMP "gev-node-$version"
 $stage = Join-Path $gev ".node-stage"
 $url = "https://nodejs.org/dist/$version/node-$version-win-x64.zip"
+$checksums = Join-Path $env:TEMP "node-$version-SHASUMS256.txt"
 
 Invoke-WebRequest -Uri $url -OutFile $archive
+Invoke-WebRequest -Uri "https://nodejs.org/dist/$version/SHASUMS256.txt" -OutFile $checksums
+$checksumLines = @(Select-String -LiteralPath $checksums -Pattern '^([0-9a-fA-F]{64})\s+\*?node-v24\.14\.0-win-x64\.zip$' | ForEach-Object Line)
+if ($checksumLines.Count -ne 1) {
+    throw "Hash SHA-256 dell'archivio non trovato in SHASUMS256.txt"
+}
+$expectedHash = ($checksumLines[0] -split '\s+')[0].ToLowerInvariant()
+$actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualHash -ne $expectedHash) {
+    throw "Hash SHA-256 non corrispondente; archivio non estratto"
+}
+
 Expand-Archive -LiteralPath $archive -DestinationPath $extract -Force
 $dist = Join-Path $extract "node-$version-win-x64"
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
@@ -47,5 +59,11 @@ Test-Path (Join-Path $gev '.node\node_modules\npm\bin\npm-cli.js')
 
 La versione stampata deve soddisfare il range scelto; verificare anche entrambi i file attesi dal plugin. L'archivio ufficiale è `https://nodejs.org/dist/`. Comandi non eseguiti durante la raccolta.
 
-> Da verificare: URL/versione concretamente scaricabile, checksum/signature richiesti dalla policy locale e compatibilità con le dipendenze GEV installate.
+Il confronto SHA-256 rileva un archivio incompleto o diverso da quello elencato
+nel manifest HTTPS ufficiale. Se la policy locale richiede la verifica della
+firma del manifest, eseguirla separatamente con le chiavi ufficiali Node.js
+prima di procedere. La procedura non è stata eseguita in questa sessione.
 
+> Da verificare: URL/versione concretamente scaricabile, firma del manifest
+> quando richiesta dalla policy locale e compatibilità con le dipendenze GEV
+> installate.

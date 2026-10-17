@@ -427,8 +427,39 @@ def start() -> None:
         _startup_finished.set()
 
 
+def _install_gev_dependencies(env: dict[str, str], node_exe: str, npm_cli: str) -> None:
+    lockfile = GEV_DIR / "package-lock.json"
+    if not lockfile.is_file():
+        raise FileNotFoundError(f"GEV: package-lock.json non trovato: {lockfile}")
+
+    _log("GEV: primo avvio, installo le dipendenze bloccate da package-lock.json con npm ci...")
+    try:
+        result = subprocess.run(
+            [node_exe, npm_cli, "ci"],
+            cwd=GEV_DIR,
+            env=env,
+            timeout=INSTALL_TIMEOUT_SEC,
+            capture_output=True,
+            text=True,
+            **_creation_options(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = "\n".join(
+            part for part in (
+                _captured_text(exc.stdout),
+                _captured_text(exc.stderr),
+            ) if part
+        )
+        raise TimeoutError(
+            f"GEV: npm ci superato il timeout di {INSTALL_TIMEOUT_SEC}s.\n{output}"
+        ) from exc
+    if result.returncode != 0:
+        output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+        raise RuntimeError(f"GEV: npm ci fallito (exit {result.returncode}).\n{output}")
+
+
 def _start_runtime() -> None:
-    """Install GEV dependencies if needed and start its local Vite server."""
+    """Install locked GEV dependencies if needed and start its local Vite server."""
     global _output_reader, _process, _started, _mcp_client, _mcp_start_error
 
     with _process_lock:
@@ -451,30 +482,7 @@ def _start_runtime() -> None:
         creation_options = _creation_options()
 
         if not (GEV_DIR / "node_modules").is_dir():
-            _log("GEV: primo avvio, eseguo npm install via node.exe (può durare minuti)...")
-            try:
-                result = subprocess.run(
-                    [node_exe, npm_cli, "install"],
-                    cwd=GEV_DIR,
-                    env=env,
-                    timeout=INSTALL_TIMEOUT_SEC,
-                    capture_output=True,
-                    text=True,
-                    **creation_options,
-                )
-            except subprocess.TimeoutExpired as exc:
-                output = "\n".join(
-                    part for part in (
-                        _captured_text(exc.stdout),
-                        _captured_text(exc.stderr),
-                    ) if part
-                )
-                raise TimeoutError(
-                    f"GEV: npm install superato il timeout di {INSTALL_TIMEOUT_SEC}s.\n{output}"
-                ) from exc
-            if result.returncode != 0:
-                output = "\n".join(part for part in (result.stdout, result.stderr) if part)
-                raise RuntimeError(f"GEV: npm install fallito (exit {result.returncode}).\n{output}")
+            _install_gev_dependencies(env, node_exe, npm_cli)
 
         vite_cli = GEV_DIR / "node_modules" / "vite" / "bin" / "vite.js"
         if not vite_cli.is_file():

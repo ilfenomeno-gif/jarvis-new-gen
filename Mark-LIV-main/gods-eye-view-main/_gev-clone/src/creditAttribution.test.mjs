@@ -202,6 +202,10 @@ const RECOGNIZED = new Set([
   '#command-dock',
   '#command-dock:has(#location-bar:not(.collapsed))',
   '#command-dock:has(#control-panel:not(.collapsed))',
+  // The embed-specific dock rules only add horizontal transforms or cap tray
+  // heights, neither of which changes the vertical bottom anchors modelled here.
+  'body.ui-embed-panels #command-dock:has(#location-bar:not(.collapsed))',
+  'body.ui-embed-panels #command-dock:has(#control-panel:not(.collapsed))',
   // rail
   '#right-context-rail',
   '#right-context-rail.layout-focus',
@@ -210,6 +214,8 @@ const RECOGNIZED = new Set([
   '#command-dock .dock-popover-content',
   '#command-dock #location-bar .dock-popover-content',
   '#command-dock #control-panel .dock-popover-content',
+  'body.ui-embed-panels #command-dock > #location-bar .dock-popover-content',
+  'body.ui-embed-panels #command-dock > #control-panel .dock-popover-content',
   '#command-dock #location-bar:not(.collapsed) .dock-popover-content',
   '#command-dock #control-panel:not(.collapsed) .dock-popover-content',
   '#command-dock.dock-has-pinned-tray #location-bar:not(.collapsed):not(.dock-pinned) .dock-popover-content',
@@ -217,6 +223,11 @@ const RECOGNIZED = new Set([
   '#command-dock.dock-has-two-pinned-trays .dock-pinned-top.dock-pinned:not(.collapsed) .dock-popover-content',
   '#command-dock.dock-has-two-pinned-trays #location-bar.dock-pinned-top.dock-pinned:not(.collapsed) .dock-popover-content',
   '#command-dock.dock-has-two-pinned-trays #control-panel.dock-pinned-top.dock-pinned:not(.collapsed) .dock-popover-content',
+]);
+
+const EMBED_TRAY_CAPS = new Set([
+  'body.ui-embed-panels #command-dock > #location-bar .dock-popover-content',
+  'body.ui-embed-panels #command-dock > #control-panel .dock-popover-content',
 ]);
 
 const ELEMENT_KEYS = ['#cesium-credits', '#command-dock', '#right-context-rail', '.dock-popover-content'];
@@ -392,8 +403,11 @@ test('the model refuses every cascade construct it cannot resolve', () => {
       complaints.push(`unrecognized selector positions a modelled element: "${part}" (${guarded.map((d) => d.prop).join(', ')})`);
       continue;
     }
+    const embeddedTrayCap = EMBED_TRAY_CAPS.has(part)
+      && rule.decls.some((decl) => decl.prop === 'max-height' && decl.value === 'min(42vh, 340px)');
     for (const condition of rule.media) {
-      if (parseMediaCondition(condition) === null) {
+      if (parseMediaCondition(condition) === null
+        && !(embeddedTrayCap && condition === '(max-height: 820px)')) {
         complaints.push(`unmodelled media condition "${condition}" on "${part}"`);
       }
     }
@@ -416,11 +430,17 @@ test('the model refuses every cascade construct it cannot resolve', () => {
         // dock/credit constants. Exemptions are each earned by a test below:
         // the rail's own max-height (resolved to `none` across the whole
         // modelled band by the rail clearance test) and `.layout-focus`
-        // (proven inapplicable at <=720px by the mobile-mode test), plus
+        // (proven inapplicable at <=720px by the mobile-mode test), the embed
+        // tray cap (proven not to alter its bottom anchor below), plus
         // synchronous measurement, which is removed before any paint.
         const railOwn = part === '#right-context-rail' && decl.prop === 'max-height';
         const railFocus = part === '#right-context-rail.layout-focus';
-        if (!railOwn && !railFocus && !railMeasurement) complaints.push(`${decl.prop}: ${decl.value} on "${part}"`);
+        const embeddedTrayCap = EMBED_TRAY_CAPS.has(part)
+          && decl.prop === 'max-height'
+          && decl.value === 'min(42vh, 340px)';
+        if (!railOwn && !railFocus && !railMeasurement && !embeddedTrayCap) {
+          complaints.push(`${decl.prop}: ${decl.value} on "${part}"`);
+        }
       }
       if (decl.prop === 'transform' && /translateY|translate3d|matrix|scale\(/.test(decl.value)) {
         const identity = decl.value === 'translateY(0) scale(1)';
@@ -434,6 +454,22 @@ test('the model refuses every cascade construct it cannot resolve', () => {
     }
   }
   assert.deepEqual(complaints, [], `the attribution model cannot resolve:\n  ${complaints.join('\n  ')}\n`);
+});
+
+test('embedded tray caps preserve the vertical edge used by the clearance model', () => {
+  const rules = RULES.filter((rule) => rule.parts.some((part) => EMBED_TRAY_CAPS.has(part))
+    && rule.decls.some((decl) => decl.prop === 'max-height'));
+  assert.equal(rules.length, 1);
+  const [rule] = rules;
+  assert.deepEqual(
+    rule.parts.filter((part) => EMBED_TRAY_CAPS.has(part)).sort(),
+    [...EMBED_TRAY_CAPS].sort(),
+  );
+  assert.deepEqual(rule.media, ['(max-height: 820px)']);
+  assert.deepEqual(
+    rule.decls.filter((decl) => GUARDED_PROPS.has(decl.prop)).map(({ prop, value }) => ({ prop, value })),
+    [{ prop: 'max-height', value: 'min(42vh, 340px)' }],
+  );
 });
 
 test('custom properties inside modelled offsets are provably non-negative', () => {

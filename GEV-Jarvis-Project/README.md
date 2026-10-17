@@ -4,6 +4,20 @@
 
 Questa cartella archivia lo stato verificabile dell'integrazione fra Jarvis Ultimate e God's Eye View (GEV). GEV è un'app browser con globo Cesium e sorgenti di dati live; Jarvis è l'assistente desktop Python/PyQt6 con un sistema di plugin. Riferimenti: GEV `package.json:2-5`; Jarvis `ui.py:21-34`, `plugins/gev_plugin.py:1-4`.
 
+> **Nota sullo stato attuale:** questa analisi è una fotografia storica di
+> checkout precedenti, non lo stato del branch `main` di `jarvis-new-gen`.
+> Percentuali, assenza di commit del dispatcher e stato del runtime riportati
+> sotto descrivono esclusivamente quella fotografia. Nel repository corrente
+> il plugin GEV, il dispatcher, il client MCP, il codice GEV e i relativi test
+> sono versionati sotto `Mark-LIV-main/`. Il runtime `.node/` e `node_modules/`
+> restano esclusi; il plugin non scarica Node, ma al primo avvio installa le
+> dipendenze bloccate dal lockfile con `npm ci`. Questo passaggio può eseguire
+> script dei pacchetti e richiede accesso al registry npm.
+
+Per l'entry point e lo stato corrente, parti dal [README root](../README.md),
+dal [codice del plugin](../Mark-LIV-main/plugins/gev_plugin.py) e dalla
+[suite di test GEV](../Mark-LIV-main/tests/test_gev_plugin.py).
+
 L'obiettivo osservabile nei commit è avviare GEV localmente dal plugin Jarvis e arrestarlo nel lifecycle dell'app. L'invio di comandi da Jarvis alla UI GEV non risulta ancora collegato nel codice committato. Riferimenti: `bbdcff8`; Jarvis `plugins/gev_plugin.py:269-398`; diff locale `plugins/gev_plugin.py:401-472` (in particolare chiamata `send_to_gev` alle righe 464-471).
 
 ## Stato sintetico
@@ -33,6 +47,9 @@ Hash completi e motivazioni: [commit-history](08-riferimenti/commit-history.md).
 
 ## Avvertenze archivistiche
 
+- Le valutazioni e le percentuali in questa cartella sono riferite alla
+  fotografia storica sopra descritta e non sono una metrica aggiornata del
+  repository corrente.
 - **Verificato nel codice/storia** indica un dato letto direttamente da una delle due repo o da Git; i riferimenti sono inseriti accanto alle affermazioni.
 - **Ipotesi** indica una proposta o un'interpretazione non stabilita da commit/codice.
 - `> Da verificare` segnala esplicitamente un fatto non ricavabile o una verifica non eseguita.

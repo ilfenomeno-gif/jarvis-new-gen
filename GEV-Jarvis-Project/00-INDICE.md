@@ -2,6 +2,12 @@
 
 Stato riferito alla fotografia locale esaminata, non a un rilascio. ✅ = commit o implementazione nel commit verificabili; 🔄 = parziale/non committato; ⏳ = nessuna evidenza verificabile. Fonte: `git log main..feat/gev-integration`, `git status`; dettaglio in `08-riferimenti/commit-history.md`.
 
+> **Avviso:** la tabella qui sotto è una fotografia storica dei checkout
+> esaminati, non lo stato corrente di `jarvis-new-gen/main`. Nel repository
+> corrente plugin, dispatcher e test GEV sono versionati in `Mark-LIV-main/`;
+> il runtime `.node/` resta invece escluso. Per dettagli aggiornati consulta
+> il [README root](../README.md) e la [nota archivistica](./README.md).
+
 | Passo | Stato | Commit hash se presente | Evidenza |
 |---|---|---|---|
 | 0 - pulizia/generazione Node portatile | 🔄 | — | `.node/` esiste ma è non tracciato né ignorato nella repo GEV; provenienza/versione > Da verificare |
