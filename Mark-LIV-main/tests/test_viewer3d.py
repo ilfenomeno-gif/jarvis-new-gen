@@ -253,6 +253,7 @@ def test_pc_cad_has_pbr_materials_and_cylinders(tmp_path):
 
 
 def test_teaching_sequence_calls_tool_in_order():
+    pytest.importorskip("trimesh")  # cad/pc.glb is built on first use and needs trimesh
     calls = []
 
     class _Ui:
