@@ -29,8 +29,8 @@ from PyQt6.QtGui import (
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
-    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
+    QApplication, QCheckBox, QComboBox, QDialog, QDockWidget, QFileDialog, QFrame,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTextEdit,
     QVBoxLayout, QWidget, QProgressBar,
 )
@@ -43,7 +43,9 @@ from core.browser_interaction import (
     normalize_link_text, normalize_web_key,
 )
 from core.animations import ScanlineOverlay, start_pulsing_glow
-from core.ui_panels import PanelState
+from core.ui_panels import (
+    DOCKS, LAYOUT_VERSION, PanelState, layout_path, load_layout, resolve, save_layout,
+)
 from core.page_reader import PageSpeechWorker, build_page_read_script
 from core.browser_url import is_allowed_http_scheme, normalize_http_url
 from gemini_chat_window import GeminiChatPanel, GeminiChatWindow
@@ -2629,6 +2631,34 @@ class RemoteKeyOverlay(QWidget):
         self.closed.emit()
 
 
+class HudDock(QDockWidget):
+    """Movable, closable, floatable side panel. ``closed_by_user`` fires only on the X button."""
+
+    closed_by_user = pyqtSignal(str)
+
+    def __init__(self, name: str, title: str, widget: QWidget, parent: QWidget):
+        super().__init__(title, parent)
+        self.panel_name = name
+        self.setObjectName(f"dock_{name}")
+        self.setWidget(widget)
+        self.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.setStyleSheet(
+            f"QDockWidget {{ color: {C.PRI}; font: bold 7pt 'Courier New'; }}"
+            f"QDockWidget::title {{ background: {C.PANEL2}; text-align: left; "
+            f"padding: 4px 8px; border-bottom: 1px solid {C.BORDER}; }}"
+        )
+
+    def closeEvent(self, event) -> None:
+        super().closeEvent(event)
+        if event.isAccepted():
+            self.closed_by_user.emit(self.panel_name)
+
+
 class MainWindow(QMainWindow):
     _log_sig          = pyqtSignal(str)
     _state_sig        = pyqtSignal(str)
@@ -2657,6 +2687,8 @@ class MainWindow(QMainWindow):
     _focus_mode_sig = pyqtSignal(bool)
     _workspace_sig = pyqtSignal(str)
     _panel_sig = pyqtSignal(str, bool)
+    _float_sig = pyqtSignal(str, int)        # (panel, -1 toggle / 0 dock / 1 float)
+    _restore_layout_sig = pyqtSignal()
     _viewer_show_sig = pyqtSignal(bool)
     _viewer_call_sig = pyqtSignal(str, str)
 
@@ -2743,9 +2775,6 @@ class MainWindow(QMainWindow):
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
-
-        self._left_panel = self._build_left_panel()
-        body.addWidget(self._left_panel, stretch=0)
 
         # Center column: HUD + resizable content panel via QSplitter
         self.hud = HudCanvas(face_path, _display)
@@ -2865,12 +2894,10 @@ class MainWindow(QMainWindow):
         self._center_split.setCollapsible(0, False)
         body.addWidget(self._center_split, stretch=5)
 
-        self._right_panel = self._build_right_panel()
-        body.addWidget(self._right_panel, stretch=0)
-
         root.addLayout(body, stretch=1)
         self._footer_panel = self._build_footer()
         root.addWidget(self._footer_panel)
+        self._build_docks()
 
         # Quick-access drawer (floating overlay, built after central widget layout is done)
         self._quick_drawer = self._build_quick_drawer()
@@ -2903,6 +2930,8 @@ class MainWindow(QMainWindow):
         self._focus_mode_sig.connect(self.set_focus_mode)
         self._workspace_sig.connect(self.apply_workspace)
         self._panel_sig.connect(self.set_panel_visible)
+        self._float_sig.connect(self._on_float_sig)
+        self._restore_layout_sig.connect(self.restore_layout)
         self._viewer_show_sig.connect(self.show_viewer3d)
         self._viewer_call_sig.connect(self.viewer3d_call)
         self._browser_key_sig.connect(self._press_key_in_webview)
@@ -2951,22 +2980,173 @@ class MainWindow(QMainWindow):
         sc_intr.activated.connect(self._do_interrupt)
         sc_focus = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
         sc_focus.activated.connect(lambda: self.set_focus_mode(not self._focus_mode))
+        self._load_saved_layout()
+        self._layout_timer = QTimer(self)
+        self._layout_timer.timeout.connect(self._persist_layout)
+        self._layout_timer.start(5000)
+
+    # --- Dock layout ---------------------------------------------------------
+    _DOCK_TITLES = {
+        "controls": "◈ SYS MONITOR",
+        "activity_log": "▸ ACTIVITY LOG",
+        "input": "▸ INPUT",
+    }
+    _pre_focus = None
+    _last_saved_layout = b""
+
+    def _build_docks(self) -> None:
+        self.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+        )
+        panels = {
+            "controls": (self._build_left_panel(), Qt.DockWidgetArea.LeftDockWidgetArea),
+            "activity_log": (self._build_log_panel(), Qt.DockWidgetArea.RightDockWidgetArea),
+            "input": (self._build_input_panel(), Qt.DockWidgetArea.RightDockWidgetArea),
+        }
+        self._docks: dict[str, HudDock] = {}
+        self._dock_floating = {name: False for name in DOCKS}
+        for name, (widget, area) in panels.items():
+            dock = HudDock(name, self._DOCK_TITLES[name], widget, self)
+            dock.closed_by_user.connect(self._on_dock_closed)
+            dock.topLevelChanged.connect(
+                lambda floating, n=name: self._dock_floating.__setitem__(n, bool(floating))
+            )
+            self.addDockWidget(area, dock)
+            self._docks[name] = dock
+        self.resizeDocks([self._docks["controls"]], [_LEFT_W], Qt.Orientation.Horizontal)
+        self.resizeDocks(
+            [self._docks["activity_log"], self._docks["input"]], [_RIGHT_W, _RIGHT_W],
+            Qt.Orientation.Horizontal,
+        )
+        self.resizeDocks(
+            [self._docks["activity_log"], self._docks["input"]], [520, 300],
+            Qt.Orientation.Vertical,
+        )
+        self._default_state = self.saveState(LAYOUT_VERSION)
+        self._header_panel.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._header_panel.customContextMenuRequested.connect(
+            lambda pos: self._layout_menu().exec(self._header_panel.mapToGlobal(pos))
+        )
+
+    def _layout_menu(self) -> QMenu:
+        menu = QMenu(self)
+        for name in DOCKS:
+            action = menu.addAction(self._DOCK_TITLES[name].lstrip("◈▸ ").title())
+            action.setCheckable(True)
+            action.setChecked(self._panel_state.visible(name))
+            action.toggled.connect(lambda checked, n=name: self.set_panel_visible(n, checked))
+        menu.addSeparator()
+        menu.addAction("Ripristina layout", self.restore_layout)
+        return menu
+
+    def createPopupMenu(self) -> QMenu:
+        return self._layout_menu()
+
+    def _on_dock_closed(self, name: str) -> None:
+        self._pre_focus = None
+        self._panel_state.set_visible(name, False)
+
+    def _on_float_sig(self, panel: str, mode: int) -> None:
+        self.float_panel(panel, None if mode < 0 else bool(mode))
+
+    def float_panel(self, panel: str, floating: bool | None = None) -> None:
+        """Tear a dock off into its own window (or put it back). A hidden dock is shown first."""
+        for name in resolve(panel):
+            dock = self._docks.get(name)
+            if dock is None:
+                raise ValueError(f"'{name}' is not a dock; docks are: {', '.join(DOCKS)}.")
+            target = (not dock.isFloating()) if floating is None else bool(floating)
+            if target and not self._panel_state.visible(name):
+                self._pre_focus = None
+                self._panel_state.set_visible(name, True)
+                dock.setVisible(True)
+            dock.setFloating(target)
+
+    def restore_layout(self) -> None:
+        """Back to the original arrangement: all docks shown, docked, in their default place."""
+        self._pre_focus = None
+        for dock in self._docks.values():
+            dock.setFloating(False)
+        self.restoreState(self._default_state, LAYOUT_VERSION)
+        self._panel_state.apply_workspace("full")
+        self._render_panels()
+
+    def _layout_snapshot(self) -> dict:
+        return {
+            "qt_state": bytes(self.saveState(LAYOUT_VERSION)),
+            "geometry": bytes(self.saveGeometry()),
+            "panels": self._panel_state.snapshot(),
+            "workspace": self._panel_state.workspace,
+            "floating": dict(self._dock_floating),
+        }
+
+    def _persist_layout(self, force: bool = False) -> None:
+        """Save only when something changed; skipped while focus mode has the docks hidden."""
+        if self._pre_focus is not None or self._panel_state.workspace == "focus":
+            return
+        snap = self._layout_snapshot()
+        fingerprint = repr(sorted(snap.items(), key=lambda kv: kv[0])).encode()
+        if not force and fingerprint == self._last_saved_layout:
+            return
+        try:
+            save_layout(layout_path(), **snap)
+            self._last_saved_layout = fingerprint
+        except OSError as exc:
+            self._log_sig.emit(f"UI: salvataggio layout non riuscito: {exc}")
+
+    def _load_saved_layout(self) -> None:
+        data = load_layout(layout_path())
+        if data is None:
+            return
+        if data["geometry"]:
+            self.restoreGeometry(data["geometry"])
+        if not self.restoreState(data["qt_state"], LAYOUT_VERSION):
+            self.restoreState(self._default_state, LAYOUT_VERSION)
+        workspace = data["workspace"]
+        self._panel_state.restore(data["panels"], "custom" if workspace == "focus" else workspace)
+        self._render_panels()
+        self._last_saved_layout = repr(
+            sorted(self._layout_snapshot().items(), key=lambda kv: kv[0])
+        ).encode()
 
     @property
     def _focus_mode(self) -> bool:
         return self._panel_state.workspace == "focus"
 
     def set_focus_mode(self, active: bool) -> None:
-        """Hide the side columns so only the central HUD stays visible."""
-        self.apply_workspace("focus" if active else "full")
+        """Hide the docks so only the central HUD stays visible; leaving brings them back as they were."""
+        if active:
+            self.apply_workspace("focus")
+        elif self._pre_focus is not None and self._panel_state.workspace == "focus":
+            visible, workspace, content_shown = self._pre_focus
+            self._pre_focus = None
+            self._panel_state.restore(visible, workspace)
+            self._render_panels()
+            # The content panel opens on demand, so give back exactly what was on screen
+            self._content_panel.setVisible(content_shown and visible["content"])
+        else:
+            self.apply_workspace("full")
 
     def apply_workspace(self, name: str) -> None:
+        was_focus = self._panel_state.workspace == "focus"
+        before = (
+            self._panel_state.snapshot(), self._panel_state.workspace,
+            self._content_panel.isVisible(),
+        )
         self._panel_state.apply_workspace(name)
+        if self._panel_state.workspace == "focus":
+            if not was_focus:
+                self._pre_focus = before
+        else:
+            self._pre_focus = None
         self._render_panels()
         if name == "recon":
             self.show_viewer3d(True)
 
     def set_panel_visible(self, panel: str, visible: bool) -> None:
+        self._pre_focus = None
         self._panel_state.set_visible(panel, visible)
         self._render_panels()
 
@@ -3026,10 +3206,9 @@ class MainWindow(QMainWindow):
     def _render_panels(self) -> None:
         widgets = {
             "header": self._header_panel,
-            "left": self._left_panel,
-            "right": self._right_panel,
             "content": self._content_panel,
             "footer": self._footer_panel,
+            **self._docks,
         }
         for name, widget in widgets.items():
             widget.setVisible(self._panel_state.visible(name))
@@ -3041,7 +3220,7 @@ class MainWindow(QMainWindow):
         pw = _CameraPreview._W
         ph = self._cam_preview.height()
         self._cam_preview.setGeometry(
-            cw.width() - _RIGHT_W - pw - 12,
+            cw.width() - pw - 12,
             cw.height() - ph - 28,
             pw, ph,
         )
@@ -3486,6 +3665,10 @@ class MainWindow(QMainWindow):
         self._browser_return_widget = None
 
     def closeEvent(self, event) -> None:
+        if self._focus_mode:
+            self.set_focus_mode(False)
+        self._layout_timer.stop()
+        self._persist_layout(force=True)
         self._page_read_pending = False
         self._page_reader_audio_sig.emit(False)
         self.hud.stop_animations()
@@ -4161,7 +4344,7 @@ class MainWindow(QMainWindow):
         pw = _CameraPreview._W
         ph = self._cam_preview.height() or _CameraPreview._H
         self._cam_preview.setGeometry(
-            cw.width() - _RIGHT_W - pw - 12,
+            cw.width() - pw - 12,
             cw.height() - ph - 28,
             pw, ph,
         )
@@ -4314,8 +4497,8 @@ class MainWindow(QMainWindow):
 
     def _build_left_panel(self) -> QWidget:
         w = QWidget()
-        w.setFixedWidth(_LEFT_W)
-        w.setStyleSheet(f"background: {C.DARK}; border-right: 1px solid {C.BORDER};")
+        w.setMinimumWidth(_LEFT_W)
+        w.setStyleSheet(f"background: {C.DARK};")
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 10, 8, 10)
         lay.setSpacing(6)
@@ -4385,10 +4568,21 @@ class MainWindow(QMainWindow):
             lay.addWidget(lbl)
 
         return w
-    def _build_right_panel(self) -> QWidget:
+    def _build_log_panel(self) -> QWidget:
         w = QWidget()
-        w.setFixedWidth(_RIGHT_W)
-        w.setStyleSheet(f"background: {C.DARK}; border-left: 1px solid {C.BORDER};")
+        w.setMinimumWidth(_LEFT_W)
+        w.setStyleSheet(f"background: {C.DARK};")
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
+        self._log = LogWidget()
+        lay.addWidget(self._log, stretch=1)
+        return w
+
+    def _build_input_panel(self) -> QWidget:
+        w = QWidget()
+        w.setMinimumWidth(_LEFT_W)
+        w.setStyleSheet(f"background: {C.DARK};")
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(6)
@@ -4398,14 +4592,6 @@ class MainWindow(QMainWindow):
             l.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
             l.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
             return l
-
-        lay.addWidget(_sec("ACTIVITY LOG"))
-        self._log = LogWidget()
-        lay.addWidget(self._log, stretch=1)
-
-        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
-        lay.addWidget(sep)
 
         lay.addWidget(_sec("FILE UPLOAD"))
         self._drop_zone = FileDropZone()
@@ -5538,6 +5724,12 @@ class JarvisUI:
     def set_panel_visible(self, panel: str, visible: bool) -> None:
         self._win._panel_sig.emit(str(panel), bool(visible))
 
+    def float_panel(self, panel: str, floating: bool | None = None) -> None:
+        self._win._float_sig.emit(str(panel), -1 if floating is None else int(bool(floating)))
+
+    def restore_layout(self) -> None:
+        self._win._restore_layout_sig.emit()
+
     def viewer3d_show(self, visible: bool) -> None:
         self._win._viewer_show_sig.emit(bool(visible))
 
@@ -5548,8 +5740,12 @@ class JarvisUI:
         self._win._viewer_call_sig.emit(function, json.dumps(json.loads(args_json)))
 
     def panel_status(self) -> dict:
-        state = self._win._panel_state
-        return {"workspace": state.workspace, "panels": state.snapshot()}
+        win = self._win
+        return {
+            "workspace": win._panel_state.workspace,
+            "panels": win._panel_state.snapshot(),
+            "floating": dict(win._dock_floating),
+        }
 
     @property
     def muted(self) -> bool:

@@ -2,9 +2,13 @@
 
 import json
 
-from core.ui_panels import PANELS, WORKSPACES
+from core.ui_panels import ALIASES, DOCKS, PANELS, WORKSPACES, resolve
 
-_MODES = ("focus_on", "focus_off", "focus_toggle", "toggle_panel", "workspace", "status")
+_MODES = (
+    "focus_on", "focus_off", "focus_toggle", "toggle_panel", "float_panel",
+    "restore_layout", "workspace", "status",
+)
+_NAMES = ", ".join(PANELS + tuple(ALIASES))
 
 
 def ui_layout(parameters: dict, player=None, **_ignored) -> str:
@@ -22,7 +26,7 @@ def ui_layout(parameters: dict, player=None, **_ignored) -> str:
             "focus_toggle": not player.focus_mode,
         }[mode]
         player.set_focus_mode(active)
-        return "Focus mode on: side panels hidden." if active else "Focus mode off: side panels shown."
+        return "Focus mode on: panels hidden." if active else "Focus mode off: panels back where they were."
 
     if mode == "status":
         return json.dumps(player.panel_status())
@@ -34,24 +38,47 @@ def ui_layout(parameters: dict, player=None, **_ignored) -> str:
         player.apply_workspace(name)
         return f"Workspace '{name}' applied."
 
-    panel = str(params.get("panel", "")).strip().lower()
-    if panel not in PANELS:
-        return f"Unknown panel '{panel}'. Use one of: {', '.join(PANELS)}."
+    if mode == "restore_layout":
+        player.restore_layout()
+        return "Layout restored: all panels shown and docked in their original place."
+
+    try:
+        names = resolve(params.get("panel", ""))
+    except ValueError as exc:
+        return str(exc)
+
+    if mode == "float_panel":
+        if not hasattr(player, "float_panel"):
+            return "The interface is not available."
+        if any(name not in DOCKS for name in names):
+            return f"Only these panels can be detached: {', '.join(DOCKS)}."
+        floating = params.get("floating")
+        if not isinstance(floating, bool):
+            floating = None
+        player.float_panel(params.get("panel"), floating)
+        verb = "toggled between docked and floating" if floating is None else (
+            "detached into a floating window" if floating else "docked again")
+        return f"Panel '{params.get('panel')}' {verb}."
+
     visible = params.get("visible")
     if not isinstance(visible, bool):
-        visible = not player.panel_status()["panels"][panel]
-    player.set_panel_visible(panel, visible)
-    return f"Panel '{panel}' {'shown' if visible else 'hidden'}."
+        panels = player.panel_status()["panels"]
+        visible = not all(panels[name] for name in names)
+    player.set_panel_visible(params.get("panel"), visible)
+    return f"Panel '{params.get('panel')}' {'shown' if visible else 'hidden'}."
 
 
 TOOL = {
     "name": "ui_layout",
     "description": (
-        "Changes the HUD layout. mode=focus_on/focus_off/focus_toggle hides or "
-        "restores the side panels. mode=workspace with workspace=full|focus|"
-        "coding|recon applies a preset. mode=toggle_panel with panel="
-        "header|left|right|content|footer and optional visible=true|false shows "
-        "or hides one panel. mode=status reports what is visible."
+        "Changes the HUD layout. mode=focus_on/focus_off/focus_toggle hides the panels "
+        "or brings them back where they were. mode=workspace with workspace=full|focus|"
+        "coding|recon applies a preset. mode=toggle_panel with panel=activity_log|"
+        "controls|input|header|content|footer (aliases: log, left, right) and optional "
+        "visible=true|false shows or hides one panel (the log can be closed and reopened). "
+        "mode=float_panel with panel=activity_log|controls|input detaches it into its own "
+        "window (floating=false docks it back, omit to toggle). mode=restore_layout resets "
+        "every panel to its original position. mode=status reports what is visible and floating."
     ),
     "risk_class": "read",
     "parameters": {
@@ -59,8 +86,9 @@ TOOL = {
         "properties": {
             "mode": {"type": "STRING", "description": ", ".join(_MODES)},
             "workspace": {"type": "STRING", "description": ", ".join(WORKSPACES)},
-            "panel": {"type": "STRING", "description": ", ".join(PANELS)},
+            "panel": {"type": "STRING", "description": _NAMES},
             "visible": {"type": "BOOLEAN", "description": "Omit to toggle."},
+            "floating": {"type": "BOOLEAN", "description": "float_panel only. Omit to toggle."},
         },
         "required": ["mode"],
     },
