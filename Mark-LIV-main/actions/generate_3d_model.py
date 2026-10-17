@@ -13,12 +13,23 @@ def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
     except ValueError as exc:
         return f"Invalid request: {exc}"
     from core import local_3d_gen
-    choice = model_gen.backend()
+    engine = params.get("engine")
+    if engine in (None, ""):
+        choice = model_gen.backend()
+    elif str(engine).lower() in model_gen.BACKENDS:
+        choice = str(engine).lower()
+    else:
+        return f"Invalid request: engine must be one of {', '.join(model_gen.BACKENDS)}"
     key = model_gen.tripo_key() if model_gen.tripo_available() else ""
     use_local = choice == "local" or (choice == "auto" and not key and local_3d_gen.is_installed())
     try:
         if use_local:
-            path = local_3d_gen.generate_local(prompt)
+            try:
+                path = local_3d_gen.generate_local(prompt)
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                raise RuntimeError(f"{type(exc).__name__}: {exc}") from None
         elif choice == "tripo" or key:
             if not model_gen.tripo_available():
                 return model_gen.SDK_MISSING_MESSAGE
@@ -29,7 +40,8 @@ def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
             return (model_gen.KEY_MISSING_MESSAGE + " Or install the free local generator: "
                     + local_3d_gen.SETUP_MESSAGE)
     except RuntimeError as exc:
-        return f"3D generation failed: {exc}"
+        engine_name = "local" if use_local else "Tripo"
+        return f"3D generation failed ({engine_name} engine): {exc}"
     if player is not None and hasattr(player, "viewer3d_call") and params.get("show", True) is not False:
         player.viewer3d_call("loadModel", [path.name])
         return f"Model '{path.name}' generated and shown as a hologram."
@@ -51,6 +63,15 @@ TOOL = {
         "properties": {
             "prompt": {"type": "STRING", "description": "What to create, max 300 characters."},
             "show": {"type": "BOOLEAN", "description": "Show it right away (default true)."},
+            "engine": {
+                "type": "STRING",
+                "enum": ["auto", "local", "tripo"],
+                "description": (
+                    "Forces the generator for this call only. Use 'local' (free, GPU) when the "
+                    "user asks for the local generator or Tripo failed (e.g. no credits); "
+                    "'tripo' for the paid API; omit for the configured default."
+                ),
+            },
         },
         "required": ["prompt"],
     },

@@ -175,3 +175,40 @@ def test_tool_auto_prefers_tripo_key_then_local_then_message(monkeypatch, tmp_pa
     monkeypatch.setattr(gen, "is_installed", lambda: False)
     msg = tool.generate_3d_model({"prompt": "a car"})
     assert "set-tripo-key" in msg and "local_3d_gen setup" in msg
+
+
+def test_engine_param_overrides_config_and_never_touches_tripo(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "tripo")
+    monkeypatch.setattr(model_gen, "tripo_available", lambda: True)
+    monkeypatch.setattr(model_gen, "tripo_key", lambda *a, **k: "key")
+
+    def no_tripo(*a, **k):
+        raise AssertionError("Tripo must not be contacted when engine='local'")
+    monkeypatch.setattr(model_gen, "generate_model", no_tripo)
+    monkeypatch.setattr(gen, "generate_local", lambda prompt: tmp_path / "sedia.glb")
+    assert "hologram" not in tool.generate_3d_model({"prompt": "una sedia", "engine": "local"})
+    assert "saved" in tool.generate_3d_model({"prompt": "una sedia", "engine": "local"})
+
+    used = []
+    monkeypatch.setattr(model_gen, "generate_model", lambda p, k: used.append("tripo") or tmp_path / "t.glb")
+    tool.generate_3d_model({"prompt": "una sedia", "engine": "tripo"})
+    tool.generate_3d_model({"prompt": "una sedia"})
+    assert used == ["tripo", "tripo"]
+    assert "engine must be" in tool.generate_3d_model({"prompt": "x", "engine": "cloud"})
+    props = tool.TOOL["parameters"]["properties"]["engine"]
+    assert props["enum"] == ["auto", "local", "tripo"]
+
+
+def test_local_errors_are_reported_verbatim(monkeypatch):
+    monkeypatch.setattr(model_gen, "tripo_available", lambda: False)
+    for raised, expected in [
+        (RuntimeError(gen.OOM_MESSAGE), "out of memory"),
+        (RuntimeError("Local 3D generation timed out (x)"), "timed out"),
+        (RuntimeError("No CUDA GPU found: y"), "No CUDA"),
+        (OSError("disk full"), "OSError: disk full"),
+    ]:
+        def boom(prompt, raised=raised):
+            raise raised
+        monkeypatch.setattr(gen, "generate_local", boom)
+        out = tool.generate_3d_model({"prompt": "una sedia", "engine": "local"})
+        assert out.startswith("3D generation failed (local engine):") and expected in out, out
