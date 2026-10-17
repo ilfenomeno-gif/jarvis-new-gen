@@ -1,0 +1,822 @@
+{
+  "schema": 1,
+  "applies_to": "ASTRALIS 3.X",
+  "framework_baseline": "3.0.21",
+  "catalog_revision": "1.3.0",
+  "skills": [
+    {
+      "name": "astralis-v3-analisi-progettuale",
+      "description": "Analizza un’architettura esistente o progetta una soluzione tecnica con confini, dati e contratti. Non usare per: Revisione di una patch, errore riproducibile o confronto di sole opzioni organizzative.",
+      "id": "AST-S-ANALISI-PROGETTUALE",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "03_ingegneria_software",
+      "protocols": [
+        1,
+        5
+      ],
+      "intents": [
+        "progettare_soluzione_tecnica"
+      ],
+      "use_when": [
+        "Analizza un’architettura esistente o progetta una soluzione tecnica con confini, dati e contratti."
+      ],
+      "avoid_when": [
+        "Revisione di una patch, errore riproducibile o confronto di sole opzioni organizzative."
+      ],
+      "materials": [
+        "Requisiti, architettura o vincoli tecnici disponibili."
+      ],
+      "prompt_ids": [
+        "AST-P-ANALISI-INGEGNERISTICA"
+      ],
+      "sources": [
+        "skill-design-analyzer.md"
+      ],
+      "path": "astralis-v3-analisi-progettuale/SKILL.md",
+      "sha256": "c5e1e4b6fff76c0c8ce6de824563f34ad2c0b597462815ded62a7ab689703897"
+    },
+    {
+      "name": "astralis-v3-chiusura-report",
+      "description": "Verifica e archivia report nel ciclo di chiusura autorizzato con esito convalidato, preservando storia e puntatori documentali. Non usare per: Sola lettura, singolo test verde, iniziativa ancora aperta o migrazione retroattiva degli archivi.",
+      "id": "AST-S-CHIUSURA-REPORT",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "05_prompt_e_documentazione",
+      "protocols": [
+        6
+      ],
+      "intents": [
+        "chiudere_report"
+      ],
+      "use_when": [
+        "Verifica e archivia report nel ciclo di chiusura autorizzato con esito convalidato, preservando storia e puntatori documentali."
+      ],
+      "avoid_when": [
+        "Sola lettura, singolo test verde, iniziativa ancora aperta o migrazione retroattiva degli archivi."
+      ],
+      "materials": [
+        "Mandato di chiusura, convalida richiesta, report e documenti che lo referenziano."
+      ],
+      "prompt_ids": [],
+      "sources": [],
+      "path": "astralis-v3-chiusura-report/SKILL.md",
+      "sha256": "37594ebb3697e62fafb12ffd34270fae99ef796da0988168f45243fac0c8375f"
+    },
+    {
+      "name": "astralis-v3-collaudo-gameplay",
+      "description": "Collauda gameplay disponibile con scenari osservabili, inclusi tastiera e feedback accessibile. Non usare per: Progettazione di un gioco ancora soltanto concettuale o simulazioni descritte come prove eseguite.",
+      "id": "AST-S-COLLAUDO-GAMEPLAY",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "06_game_design_e_collaudo",
+      "protocols": [
+        2,
+        4
+      ],
+      "intents": [
+        "collaudare_gioco"
+      ],
+      "use_when": [
+        "Collauda gameplay disponibile con scenari osservabili, inclusi tastiera e feedback accessibile."
+      ],
+      "avoid_when": [
+        "Progettazione di un gioco ancora soltanto concettuale o simulazioni descritte come prove eseguite."
+      ],
+      "materials": [
+        "Build o prototipo, controlli, obiettivi di prova e strumenti disponibili."
+      ],
+      "prompt_ids": [
+        "AST-P-COLLAUDO-GAMEPLAY"
+      ],
+      "sources": [],
+      "path": "astralis-v3-collaudo-gameplay/SKILL.md",
+      "sha256": "d4fd9c3dc1a1651ecca41cae0f6d600b6630db6de5060eda33c037d01ecda38b"
+    },
+    {
+      "name": "astralis-v3-confronto-opzioni",
+      "description": "Confronta almeno due opzioni note per aiutare una scelta motivata e contestabile. Non usare per: Alternative non ancora definite o scelta dell’utente già conclusa.",
+      "id": "AST-S-CONFRONTO-OPZIONI",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "02_decisione_e_pianificazione",
+      "protocols": [
+        1
+      ],
+      "intents": [
+        "scegliere_opzioni"
+      ],
+      "use_when": [
+        "Confronta almeno due opzioni note per aiutare una scelta motivata e contestabile."
+      ],
+      "avoid_when": [
+        "Alternative non ancora definite o scelta dell’utente già conclusa."
+      ],
+      "materials": [
+        "Opzioni, obiettivo, criteri e vincoli decisivi."
+      ],
+      "prompt_ids": [
+        "AST-P-ANALISI-PROFONDA"
+      ],
+      "sources": [
+        "skill-decision-matrix.md"
+      ],
+      "path": "astralis-v3-confronto-opzioni/SKILL.md",
+      "sha256": "a14d964e83fd8ab5b4a7e696e194743d8a2fe168597ac7fe7a42afa3c3d23967"
+    },
+    {
+      "name": "astralis-v3-continuita-sessione",
+      "description": "Prepara ripresa, sospensione o handoff di un’iniziativa conservando stato, evidenze, vincoli e prossimo passo tra sessioni o AI. Non usare per: Normale risposta conclusiva senza necessità di ripresa o invio automatico a un’altra AI.",
+      "id": "AST-S-CONTINUITA-SESSIONE",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "05_prompt_e_documentazione",
+      "protocols": [
+        6,
+        7
+      ],
+      "intents": [
+        "preservare_continuita_sessione"
+      ],
+      "use_when": [
+        "Prepara ripresa, sospensione o handoff di un’iniziativa conservando stato, evidenze, vincoli e prossimo passo tra sessioni o AI."
+      ],
+      "avoid_when": [
+        "Normale risposta conclusiva senza necessità di ripresa o invio automatico a un’altra AI."
+      ],
+      "materials": [
+        "Iniziativa, report o RRU pertinente, stato corrente, mandato e attività aperte."
+      ],
+      "prompt_ids": [],
+      "sources": [],
+      "path": "astralis-v3-continuita-sessione/SKILL.md",
+      "sha256": "0a0c7e26da9985b20b3d27fe17d841365533313e91098b24712864aaae8d3675"
+    },
+    {
+      "name": "astralis-v3-diagnosi",
+      "description": "Diagnostica errori, stack trace, regressioni e sessioni osservate tramite log o telemetrie. Non usare per: Revisione generale del codice o giudizio su una proposta senza un problema osservato.",
+      "id": "AST-S-DIAGNOSI",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "03_ingegneria_software",
+      "protocols": [
+        4,
+        10
+      ],
+      "intents": [
+        "diagnosticare_sessione"
+      ],
+      "use_when": [
+        "Diagnostica errori, stack trace, regressioni e sessioni osservate tramite log o telemetrie."
+      ],
+      "avoid_when": [
+        "Revisione generale del codice o giudizio su una proposta senza un problema osservato."
+      ],
+      "materials": [
+        "Sintomo, atteso contro osservato, ambiente e log o riproduzione disponibili."
+      ],
+      "prompt_ids": [
+        "AST-P-DIAGNOSI-TELEMETRIE"
+      ],
+      "sources": [
+        "skill-debug-assistant.md"
+      ],
+      "path": "astralis-v3-diagnosi/SKILL.md",
+      "sha256": "c49ab3f2fcdb62e9ae5a89cdfa89b6e93205ab446594dab6d0f1d4e02db7a1a2"
+    },
+    {
+      "name": "astralis-v3-estrazione-fedele",
+      "description": "Estrae campi, fatti o citazioni da documenti mantenendo la provenienza e senza completare le lacune. Non usare per: Riassunto libero, generazione creativa o dati da inferire anziché estrarre.",
+      "id": "AST-S-ESTRAZIONE-FEDELE",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "01_analisi_e_conoscenza",
+      "protocols": [
+        7
+      ],
+      "intents": [
+        "estrarre_dati"
+      ],
+      "use_when": [
+        "Estrae campi, fatti o citazioni da documenti mantenendo la provenienza e senza completare le lacune."
+      ],
+      "avoid_when": [
+        "Riassunto libero, generazione creativa o dati da inferire anziché estrarre."
+      ],
+      "materials": [
+        "Fonti leggibili e campi o informazioni richiesti."
+      ],
+      "prompt_ids": [
+        "AST-P-ESTRAZIONE-DOCUMENTALE"
+      ],
+      "sources": [],
+      "path": "astralis-v3-estrazione-fedele/SKILL.md",
+      "sha256": "c5da5ce4984bad619dd920273d52e366202d0338eb5977ab5e453df6ec070366"
+    },
+    {
+      "name": "astralis-v3-game-design",
+      "description": "Progetta o rivede sistemi di gioco: ciclo principale, meccaniche, progressione e accessibilità. Non usare per: Collaudo di gameplay già implementato o progetto software senza meccaniche ludiche.",
+      "id": "AST-S-GAME-DESIGN",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "06_game_design_e_collaudo",
+      "protocols": [
+        1,
+        2
+      ],
+      "intents": [
+        "progettare_gioco"
+      ],
+      "use_when": [
+        "Progetta o rivede sistemi di gioco: ciclo principale, meccaniche, progressione e accessibilità."
+      ],
+      "avoid_when": [
+        "Collaudo di gameplay già implementato o progetto software senza meccaniche ludiche."
+      ],
+      "materials": [
+        "Idea o progetto, pubblico, piattaforma, vincoli e meccaniche esistenti."
+      ],
+      "prompt_ids": [
+        "AST-P-GAME-DESIGN"
+      ],
+      "sources": [
+        "skill-game-design-engine.md"
+      ],
+      "path": "astralis-v3-game-design/SKILL.md",
+      "sha256": "f7efd1ee6c2150a43bbb2877b3e888d8862988433b4f14c43543efccb8a9901e"
+    },
+    {
+      "name": "astralis-v3-generazione-prompt",
+      "description": "Crea un prompt nuovo per un obiettivo, con input, perimetro e risultato verificabile. Non usare per: Miglioramento di un prompt già scritto o esecuzione diretta della normale richiesta dell’utente.",
+      "id": "AST-S-GENERAZIONE-PROMPT",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "05_prompt_e_documentazione",
+      "protocols": [
+        7
+      ],
+      "intents": [
+        "creare_prompt"
+      ],
+      "use_when": [
+        "Crea un prompt nuovo per un obiettivo, con input, perimetro e risultato verificabile."
+      ],
+      "avoid_when": [
+        "Miglioramento di un prompt già scritto o esecuzione diretta della normale richiesta dell’utente."
+      ],
+      "materials": [
+        "Obiettivo, destinatario, contesto e vincoli del prompt."
+      ],
+      "prompt_ids": [
+        "AST-P-GENERAZIONE-PROMPT"
+      ],
+      "sources": [
+        "skill-prompt-architect.md"
+      ],
+      "path": "astralis-v3-generazione-prompt/SKILL.md",
+      "sha256": "e173e8e01f9f9ce79cde99408664d879825e5f245f8d22937d3b507e0359f924"
+    },
+    {
+      "name": "astralis-v3-ideazione",
+      "description": "Chiarisce un’idea embrionale o un bisogno ancora incompleto prima di scegliere una soluzione. Non usare per: Requisito già chiaro, strategia già elaborata, piano esecutivo o implementazione.",
+      "id": "AST-S-IDEAZIONE",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "02_decisione_e_pianificazione",
+      "protocols": [
+        1
+      ],
+      "intents": [
+        "chiarire_idea"
+      ],
+      "use_when": [
+        "Chiarisce un’idea embrionale o un bisogno ancora incompleto prima di scegliere una soluzione."
+      ],
+      "avoid_when": [
+        "Requisito già chiaro, strategia già elaborata, piano esecutivo o implementazione."
+      ],
+      "materials": [
+        "Intuizione o bisogno, destinatari e contesto disponibile; lacune ammesse."
+      ],
+      "prompt_ids": [
+        "AST-P-IDEA-RFC"
+      ],
+      "sources": [],
+      "path": "astralis-v3-ideazione/SKILL.md",
+      "sha256": "25c633070f3cd55c166e4f57ebd939e27041e113a13cd73ed247aca782b534bc"
+    },
+    {
+      "name": "astralis-v3-implementazione-controllata",
+      "description": "Esegue modifiche circoscritte richieste dall’utente, sulla base di un piano o di requisiti operativi chiari. Non usare per: Richiesta di soli consigli, revisione o validazione senza mandato di modifica.",
+      "id": "AST-S-IMPLEMENTAZIONE-CONTROLLATA",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "04_validazione_ed_esecuzione",
+      "protocols": [
+        3
+      ],
+      "intents": [
+        "implementare_piano"
+      ],
+      "use_when": [
+        "Esegue modifiche circoscritte richieste dall’utente, sulla base di un piano o di requisiti operativi chiari."
+      ],
+      "avoid_when": [
+        "Richiesta di soli consigli, revisione o validazione senza mandato di modifica."
+      ],
+      "materials": [
+        "Mandato di modifica, requisiti o piano, workspace e strumenti disponibili."
+      ],
+      "prompt_ids": [
+        "AST-P-IMPLEMENTAZIONE"
+      ],
+      "sources": [],
+      "path": "astralis-v3-implementazione-controllata/SKILL.md",
+      "sha256": "c3d5e6cea70385cff81e1c7f80a04f80c0da1bb23bb265ae1c7ea08cb121635e"
+    },
+    {
+      "name": "astralis-v3-lettura-report",
+      "description": "Legge selettivamente report e handoff quando si riprende lavoro sostanziale, si verifica una precedente decisione o viene fornita una diagnosi esterna. Non usare per: Domanda semplice indipendente dal lavoro corrente o lettura indiscriminata di tutto l’archivio.",
+      "id": "AST-S-LETTURA-REPORT",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "05_prompt_e_documentazione",
+      "protocols": [
+        4,
+        5,
+        7
+      ],
+      "intents": [
+        "leggere_report"
+      ],
+      "use_when": [
+        "Legge selettivamente report e handoff quando si riprende lavoro sostanziale, si verifica una precedente decisione o viene fornita una diagnosi esterna."
+      ],
+      "avoid_when": [
+        "Domanda semplice indipendente dal lavoro corrente o lettura indiscriminata di tutto l’archivio."
+      ],
+      "materials": [
+        "Mandato corrente, radice documentale, iniziativa o fonte da leggere e strumenti di lettura."
+      ],
+      "prompt_ids": [],
+      "sources": [],
+      "path": "astralis-v3-lettura-report/SKILL.md",
+      "sha256": "46c85d2766b82ec44a4b1cc14851355678cae98411a917f10991b768e5004181"
+    },
+    {
+      "name": "astralis-v3-pianificazione",
+      "description": "Traduce un obiettivo o una scelta già presa in piano operativo; per software formalizza contratti, file e verifiche proporzionate. Non usare per: confronto di opzioni aperte, validazione del piano o implementazione.",
+      "id": "AST-S-PIANIFICAZIONE",
+      "revision": "1.2.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "02_decisione_e_pianificazione",
+      "protocols": [
+        1
+      ],
+      "intents": [
+        "pianificare_attivita",
+        "redigere_piano_tecnico"
+      ],
+      "use_when": [
+        "Traduce un obiettivo o una scelta già presa in piano operativo; per software formalizza contratti, file e verifiche proporzionate."
+      ],
+      "avoid_when": [
+        "Confronto di opzioni ancora aperte, validazione di un piano esistente o richiesta di eseguire codice."
+      ],
+      "materials": [
+        "Obiettivo, stato attuale, decisioni già prese e vincoli."
+      ],
+      "prompt_ids": [
+        "AST-P-PIANIFICAZIONE"
+      ],
+      "sources": [
+        "skill-strategic-planner.md"
+      ],
+      "path": "astralis-v3-pianificazione/SKILL.md",
+      "sha256": "e1de627df106acedac8ca7b769d3bd01ae9f7800bd19e17f5afef56769631de0"
+    },
+    {
+      "name": "astralis-v3-progettazione-api",
+      "description": "Progetta o rivede contratti API, endpoint, comandi CLI o strumenti MCP. Non usare per: Revisione generica di codice senza contratti da definire o implementazione non richiesta.",
+      "id": "AST-S-PROGETTAZIONE-API",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "03_ingegneria_software",
+      "protocols": [
+        1,
+        5
+      ],
+      "intents": [
+        "progettare_api"
+      ],
+      "use_when": [
+        "Progetta o rivede contratti API, endpoint, comandi CLI o strumenti MCP."
+      ],
+      "avoid_when": [
+        "Revisione generica di codice senza contratti da definire o implementazione non richiesta."
+      ],
+      "materials": [
+        "Consumatori, operazioni, stack e vincoli del contratto."
+      ],
+      "prompt_ids": [
+        "AST-P-ANALISI-INGEGNERISTICA"
+      ],
+      "sources": [
+        "skill-api-designer.md"
+      ],
+      "path": "astralis-v3-progettazione-api/SKILL.md",
+      "sha256": "b5b9a81e07a62727d3d82cf3034b628890b50efa783ece4d68ef983e4bc8676e"
+    },
+    {
+      "name": "astralis-v3-ragionamento-approfondito",
+      "description": "Analizza una questione concettuale complessa con assunzioni o conseguenze incerte. Non usare per: Una risposta semplice, una scelta tra opzioni già definite o un errore concreto da diagnosticare.",
+      "id": "AST-S-RAGIONAMENTO-APPROFONDITO",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "01_analisi_e_conoscenza",
+      "protocols": [
+        12
+      ],
+      "intents": [
+        "analizzare_decisione"
+      ],
+      "use_when": [
+        "Analizza una questione concettuale complessa con assunzioni o conseguenze incerte."
+      ],
+      "avoid_when": [
+        "Una risposta semplice, una scelta tra opzioni già definite o un errore concreto da diagnosticare."
+      ],
+      "materials": [
+        "Questione, contesto e vincoli noti."
+      ],
+      "prompt_ids": [
+        "AST-P-ANALISI-PROFONDA"
+      ],
+      "sources": [
+        "skill-deep-reasoner.md"
+      ],
+      "path": "astralis-v3-ragionamento-approfondito/SKILL.md",
+      "sha256": "81df5cb015a35433bd2cef3012532bec11e56f4dee10f3dd483451d42c36a514"
+    },
+    {
+      "name": "astralis-v3-redazione-report",
+      "description": "Crea o aggiorna report da evidenze reali durante lavoro sostanziale autorizzato, diagnosi, collaudo o consegna che richiedono continuità, anche senza richiesta separata di report. Non usare per: Chiarimenti banali, nessun avanzamento o analisi consultiva priva di mandato di salvataggio.",
+      "id": "AST-S-REDAZIONE-REPORT",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "05_prompt_e_documentazione",
+      "protocols": [
+        4,
+        6,
+        7
+      ],
+      "intents": [
+        "redigere_report"
+      ],
+      "use_when": [
+        "Crea o aggiorna report da evidenze reali durante lavoro sostanziale autorizzato, diagnosi, collaudo o consegna che richiedono continuità, anche senza richiesta separata di report."
+      ],
+      "avoid_when": [
+        "Chiarimenti banali, nessun avanzamento o analisi consultiva priva di mandato di salvataggio."
+      ],
+      "materials": [
+        "Obiettivo, mandato, radice documentale risolta, attività ed evidenze effettive."
+      ],
+      "prompt_ids": [],
+      "sources": [
+        "skill-report-writer.md"
+      ],
+      "path": "astralis-v3-redazione-report/SKILL.md",
+      "sha256": "db1bc68ac0ea2c5d83bac26e2423ba3eda000f34f10a2c12066acf6ba04c762e"
+    },
+    {
+      "name": "astralis-v3-refactoring",
+      "description": "Pianifica o applica refactoring a codice funzionante preservando il comportamento pubblico. Non usare per: Correzione di un bug ancora non diagnosticato o riscrittura integrale non richiesta.",
+      "id": "AST-S-REFACTORING",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "03_ingegneria_software",
+      "protocols": [
+        5,
+        11
+      ],
+      "intents": [
+        "rifattorizzare_codice"
+      ],
+      "use_when": [
+        "Pianifica o applica refactoring a codice funzionante preservando il comportamento pubblico."
+      ],
+      "avoid_when": [
+        "Correzione di un bug ancora non diagnosticato o riscrittura integrale non richiesta."
+      ],
+      "materials": [
+        "Codice, comportamento da preservare e obiettivo del refactoring."
+      ],
+      "prompt_ids": [],
+      "sources": [
+        "skill-refactor-guide.md"
+      ],
+      "path": "astralis-v3-refactoring/SKILL.md",
+      "sha256": "c2c4b382cbf0cda3ee42552acce1a39bd3812ae6090246d4a1d9e5240fb9be47"
+    },
+    {
+      "name": "astralis-v3-revisione-codice",
+      "description": "Rivede codice o diff e segnala difetti, regressioni e rischi concreti con riferimenti. Non usare per: Puro refactoring estetico, validazione di una strategia o diagnosi senza codice disponibile.",
+      "id": "AST-S-REVISIONE-CODICE",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "03_ingegneria_software",
+      "protocols": [
+        5
+      ],
+      "intents": [
+        "revisionare_codice"
+      ],
+      "use_when": [
+        "Rivede codice o diff e segnala difetti, regressioni e rischi concreti con riferimenti."
+      ],
+      "avoid_when": [
+        "Puro refactoring estetico, validazione di una strategia o diagnosi senza codice disponibile."
+      ],
+      "materials": [
+        "Codice o diff, comportamento atteso e contesto necessario."
+      ],
+      "prompt_ids": [
+        "AST-P-REVIEW-CODICE"
+      ],
+      "sources": [
+        "skill-code-reviewer.md"
+      ],
+      "path": "astralis-v3-revisione-codice/SKILL.md",
+      "sha256": "730a0edd02bf175f938ed908e3c78971a0b1ef04eaa48d9455ebc6bf395b88b4"
+    },
+    {
+      "name": "astralis-v3-revisione-prompt",
+      "description": "Migliora un prompt esistente preservando intento, vincoli e destinatario. Non usare per: Prompt da creare senza una bozza o normale richiesta che non chiede di migliorare il prompt.",
+      "id": "AST-S-REVISIONE-PROMPT",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "05_prompt_e_documentazione",
+      "protocols": [
+        7
+      ],
+      "intents": [
+        "migliorare_prompt"
+      ],
+      "use_when": [
+        "Migliora un prompt esistente preservando intento, vincoli e destinatario."
+      ],
+      "avoid_when": [
+        "Prompt da creare senza una bozza o normale richiesta che non chiede di migliorare il prompt."
+      ],
+      "materials": [
+        "Prompt originale, scopo e problemi da correggere se noti."
+      ],
+      "prompt_ids": [
+        "AST-P-REVISIONE-PROMPT"
+      ],
+      "sources": [
+        "skill-ottimizza-prompt.md"
+      ],
+      "path": "astralis-v3-revisione-prompt/SKILL.md",
+      "sha256": "542ce187a583f7af9abf7a74fd87da8f925c960842037f1a98d4b26b28569d35"
+    },
+    {
+      "name": "astralis-v3-scenari",
+      "description": "Esplora alternative ancora aperte, tecniche, strategiche o narrative, e le loro conseguenze. Non usare per: Opzioni già definite da confrontare o una decisione già presa da eseguire.",
+      "id": "AST-S-SCENARI",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "02_decisione_e_pianificazione",
+      "protocols": [
+        1
+      ],
+      "intents": [
+        "esplorare_scenari"
+      ],
+      "use_when": [
+        "Esplora alternative ancora aperte, tecniche, strategiche o narrative, e le loro conseguenze."
+      ],
+      "avoid_when": [
+        "Opzioni già definite da confrontare o una decisione già presa da eseguire."
+      ],
+      "materials": [
+        "Problema, obiettivo, vincoli e alternative eventualmente già considerate."
+      ],
+      "prompt_ids": [],
+      "sources": [
+        "skill-scenario-builder.md"
+      ],
+      "path": "astralis-v3-scenari/SKILL.md",
+      "sha256": "384ff6ea896f37e20a3f1cc193c4fe70d75681bc5cb326ea24f3a1c98856459e"
+    },
+    {
+      "name": "astralis-v3-selezione-prompt",
+      "description": "Consiglia quale prompt del catalogo Astralis 3.X usare in un contesto, anche con una domanda breve. Non usare per: Richiesta di eseguire direttamente un compito senza chiedere quale prompt scegliere.",
+      "id": "AST-S-SELEZIONE-PROMPT",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "05_prompt_e_documentazione",
+      "protocols": [
+        7
+      ],
+      "intents": [
+        "consigliare_prompt"
+      ],
+      "use_when": [
+        "Consiglia quale prompt del catalogo Astralis 3.X usare in un contesto, anche con una domanda breve."
+      ],
+      "avoid_when": [
+        "Richiesta di eseguire direttamente un compito senza chiedere quale prompt scegliere."
+      ],
+      "materials": [
+        "Contesto dell’utente e accesso al catalogo del Master Hub Astralis 3.X."
+      ],
+      "prompt_ids": [],
+      "sources": [],
+      "path": "astralis-v3-selezione-prompt/SKILL.md",
+      "sha256": "3e8f241901e330d2298053f0cd2a7edb8532523a6dfe08c8ad28242717b15d6d"
+    },
+    {
+      "name": "astralis-v3-sintesi-conoscenza",
+      "description": "Sintetizza testi lunghi, tecnici o narrativi, conservandone struttura e punti essenziali. Non usare per: Estrazione letterale di campi, giudizio critico su un progetto o diagnosi di un errore.",
+      "id": "AST-S-SINTESI-CONOSCENZA",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "01_analisi_e_conoscenza",
+      "protocols": [
+        7
+      ],
+      "intents": [
+        "sintetizzare_documento"
+      ],
+      "use_when": [
+        "Sintetizza testi lunghi, tecnici o narrativi, conservandone struttura e punti essenziali."
+      ],
+      "avoid_when": [
+        "Estrazione letterale di campi, giudizio critico su un progetto o diagnosi di un errore."
+      ],
+      "materials": [
+        "Testo o documenti leggibili e scopo della sintesi."
+      ],
+      "prompt_ids": [],
+      "sources": [
+        "skill-knowledge-extractor.md"
+      ],
+      "path": "astralis-v3-sintesi-conoscenza/SKILL.md",
+      "sha256": "f64aebd9e1541625f375fbbd1bfbde607790582d77e4fc0f44d06616e7abc454"
+    },
+    {
+      "name": "astralis-v3-strategia-logica",
+      "description": "Costruisce modello mentale, tesi e invarianti di una strategia per un problema compreso ma senza approccio concettuale definito. Non usare per: Validazione di una strategia già fornita, piano tecnico dettagliato o hotfix semplice con causa e soluzione note.",
+      "id": "AST-S-STRATEGIA-LOGICA",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "02_decisione_e_pianificazione",
+      "protocols": [
+        1,
+        12
+      ],
+      "intents": [
+        "creare_strategia_logica"
+      ],
+      "use_when": [
+        "Costruisce modello mentale, tesi e invarianti di una strategia per un problema compreso ma senza approccio concettuale definito."
+      ],
+      "avoid_when": [
+        "Validazione di una strategia già fornita, piano tecnico dettagliato o hotfix semplice con causa e soluzione note."
+      ],
+      "materials": [
+        "Problema, obiettivo, contesto e vincoli; evidenze o idea di origine se presenti."
+      ],
+      "prompt_ids": [
+        "AST-P-STRATEGIA-LOGICA"
+      ],
+      "sources": [],
+      "path": "astralis-v3-strategia-logica/SKILL.md",
+      "sha256": "91d7afea3e39e673ed4190180ef8ba7b2896a2b4d3da9a4e12f938a77a09a535"
+    },
+    {
+      "name": "astralis-v3-testing-e-collaudo",
+      "description": "Progetta, realizza o esegue test e collaudi di software generico secondo modalità e mandato, con prove tracciabili. Non usare per: Sola code review, giudizio su una strategia o collaudo delle meccaniche gameplay senza verifiche software generali.",
+      "id": "AST-S-TESTING-E-COLLAUDO",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "04_validazione_ed_esecuzione",
+      "protocols": [
+        2,
+        3,
+        4
+      ],
+      "intents": [
+        "progettare_test",
+        "realizzare_test",
+        "eseguire_test",
+        "collaudare_software"
+      ],
+      "use_when": [
+        "Progetta, realizza o esegue test e collaudi di software generico secondo modalità e mandato, con prove tracciabili."
+      ],
+      "avoid_when": [
+        "Sola code review, giudizio su una strategia o collaudo delle meccaniche gameplay senza verifiche software generali."
+      ],
+      "materials": [
+        "Requisiti o contratti, codice se disponibile, ambiente, strumenti e mandato; dichiarare materiali mancanti."
+      ],
+      "prompt_ids": [
+        "AST-P-TESTING-COLLAUDO"
+      ],
+      "sources": [],
+      "path": "astralis-v3-testing-e-collaudo/SKILL.md",
+      "sha256": "aaa5b5ed9d0a589873373f483255db52c7fd23e672607fd278ff157dcd8a87fe"
+    },
+    {
+      "name": "astralis-v3-validazione-implementazione",
+      "description": "Verifica un risultato già realizzato rispetto a requisiti, contratti e prove di accettazione. Non usare per: Giudizio su una strategia astratta, piano non eseguito o sola ricerca di bug nel diff.",
+      "id": "AST-S-VALIDAZIONE-IMPLEMENTAZIONE",
+      "revision": "1.1.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "04_validazione_ed_esecuzione",
+      "protocols": [
+        2
+      ],
+      "intents": [
+        "validare_implementazione"
+      ],
+      "use_when": [
+        "Verifica un risultato già realizzato rispetto a requisiti, contratti e prove di accettazione."
+      ],
+      "avoid_when": [
+        "Giudizio su una strategia astratta, piano non eseguito o sola ricerca di bug nel diff."
+      ],
+      "materials": [
+        "Implementazione o artefatto, requisiti e ambiente di verifica disponibile."
+      ],
+      "prompt_ids": [
+        "AST-P-VALIDAZIONE-IMPLEMENTAZIONE"
+      ],
+      "sources": [],
+      "path": "astralis-v3-validazione-implementazione/SKILL.md",
+      "sha256": "db5668f436e4f1df0f2bf3f49604d583d3fac615f5efd6ae36875c15295e188e"
+    },
+    {
+      "name": "astralis-v3-validazione-piano",
+      "description": "Verifica un piano esistente prima dell’esecuzione: dipendenze, fattibilità, copertura e verifiche. Non usare per: Creazione di un piano da zero o collaudo di un’implementazione già realizzata.",
+      "id": "AST-S-VALIDAZIONE-PIANO",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "04_validazione_ed_esecuzione",
+      "protocols": [
+        2,
+        12
+      ],
+      "intents": [
+        "validare_piano"
+      ],
+      "use_when": [
+        "Verifica un piano esistente prima dell’esecuzione: dipendenze, fattibilità, copertura e verifiche."
+      ],
+      "avoid_when": [
+        "Creazione di un piano da zero o collaudo di un’implementazione già realizzata."
+      ],
+      "materials": [
+        "Piano, obiettivo, contesto operativo e vincoli."
+      ],
+      "prompt_ids": [
+        "AST-P-VALIDAZIONE-PIANO"
+      ],
+      "sources": [],
+      "path": "astralis-v3-validazione-piano/SKILL.md",
+      "sha256": "6267881177ae53f989da7cb0a26e34f1b61ce16d0104e11cae0a62ea0377497b"
+    },
+    {
+      "name": "astralis-v3-validazione-strategia",
+      "description": "Valuta se una strategia proposta è coerente con obiettivo, assunzioni e vincoli prima del piano. Non usare per: Definizione di una strategia nuova, validazione del piano dettagliato o verifica del codice realizzato.",
+      "id": "AST-S-VALIDAZIONE-STRATEGIA",
+      "revision": "1.0.0",
+      "applies_to": "ASTRALIS 3.X",
+      "category": "04_validazione_ed_esecuzione",
+      "protocols": [
+        2
+      ],
+      "intents": [
+        "validare_strategia"
+      ],
+      "use_when": [
+        "Valuta se una strategia proposta è coerente con obiettivo, assunzioni e vincoli prima del piano."
+      ],
+      "avoid_when": [
+        "Definizione di una strategia nuova, validazione del piano dettagliato o verifica del codice realizzato."
+      ],
+      "materials": [
+        "Strategia proposta, obiettivo, criteri di successo e vincoli."
+      ],
+      "prompt_ids": [
+        "AST-P-VALIDAZIONE-STRATEGIA"
+      ],
+      "sources": [],
+      "path": "astralis-v3-validazione-strategia/SKILL.md",
+      "sha256": "334d5d157cf24c6771767e1b6c52384bbc3b0b85be96e4b421e90c8d10ea46ea"
+    }
+  ]
+}

@@ -1,0 +1,1058 @@
+{
+  "schema": 1,
+  "applies_to": "ASTRALIS 3.X",
+  "framework_baseline": "3.0.21",
+  "catalog_revision": "1.3.0",
+  "source": "frontmatter dei prompt canonici; indice derivato, non modificare a mano",
+  "selection_policy": "leggere la scheda v3, valutare obiettivo e materiali, verificare il candidato; nessuna attivazione automatica",
+  "prompts": [
+    {
+      "id": "AST-P-ANALISI-INGEGNERISTICA",
+      "title": "Analisi ingegneristica e architetturale",
+      "revision": "1.2.0",
+      "category": "03_progettazione_e_pianificazione",
+      "protocols": [
+        1,
+        12
+      ],
+      "domains": [
+        "software",
+        "addon_nvda",
+        "utility",
+        "giochi"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_materiali",
+        "lettura_file_opzionale"
+      ],
+      "selection": {
+        "intents": [
+          "progettare_soluzione_tecnica"
+        ],
+        "use_when": [
+          "Valutare una soluzione software, responsabilità, contratti e alternative tecniche."
+        ],
+        "avoid_when": [
+          "Non è l’esecuzione di un piano né la validazione indipendente di un diff concluso."
+        ],
+        "materials": [
+          "requisito_tecnico",
+          "stack_o_fonti",
+          "vincoli"
+        ],
+        "examples": [
+          "Quale architettura conviene per questa funzione?"
+        ],
+        "related": [
+          {
+            "id": "AST-P-PIANIFICAZIONE",
+            "when": "Per convertire la decisione tecnica in passi implementativi."
+          }
+        ]
+      },
+      "path": "03_progettazione_e_pianificazione/PROMPT_ANALISI_INGEGNERISTICA.md",
+      "sha256": "30cfdcc2174224b6a9c133fd58774dc54cd94ffbb412d3b3ef61aced10ed45eb"
+    },
+    {
+      "id": "AST-P-ANALISI-PROFONDA",
+      "title": "Analisi approfondita e confronto delle alternative",
+      "revision": "1.1.0",
+      "category": "02_analisi_e_diagnosi",
+      "protocols": [
+        1,
+        12
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_materiali"
+      ],
+      "selection": {
+        "intents": [
+          "analizzare_decisione"
+        ],
+        "use_when": [
+          "Comprendere un problema complesso e confrontare alternative non necessariamente software."
+        ],
+        "avoid_when": [
+          "Per una specifica scelta tecnica usare analisi ingegneristica; per un piano concreto usare validazione piano."
+        ],
+        "materials": [
+          "problema",
+          "obiettivo",
+          "vincoli"
+        ],
+        "examples": [
+          "Aiutami a scegliere fra questi approcci con questi vincoli."
+        ],
+        "related": [
+          {
+            "id": "AST-P-ANALISI-INGEGNERISTICA",
+            "when": "Se la decisione riguarda contratti e componenti software."
+          }
+        ]
+      },
+      "path": "02_analisi_e_diagnosi/PROMPT_RAGIONAMENTO_APPROFONDITO.md",
+      "sha256": "4f166e9711fa442a6b450853100fe8bd809b99e384481b181dfed26bc3be4393"
+    },
+    {
+      "id": "AST-P-COLLAUDO-GAMEPLAY",
+      "title": "Collaudo del gameplay senza correzioni implicite",
+      "revision": "1.1.0",
+      "category": "07_domini/game_design",
+      "protocols": [
+        3,
+        4,
+        5
+      ],
+      "domains": [
+        "giochi"
+      ],
+      "mode": "collaudo_su_mandato_senza_correzione",
+      "requires": [
+        "controllo_ui_o_runner",
+        "lettura_log",
+        "ambiente_test"
+      ],
+      "selection": {
+        "intents": [
+          "collaudare_gioco"
+        ],
+        "use_when": [
+          "Interagire con una build di test e controllare scenari e accessibilità del gameplay."
+        ],
+        "avoid_when": [
+          "Per log già raccolti usare diagnosi; senza ambiente o strumenti proporre un piano manuale, senza simulare interazioni."
+        ],
+        "materials": [
+          "build_test",
+          "scenari_e_attesi",
+          "ambiente_isolato",
+          "mandato_interazioni"
+        ],
+        "examples": [
+          "Devo verificare le meccaniche nella build di test senza applicare fix."
+        ],
+        "related": [
+          {
+            "id": "AST-P-DIAGNOSI-TELEMETRIE",
+            "when": "Se gli scenari producono log da analizzare per risalire alla causa."
+          }
+        ]
+      },
+      "path": "07_domini/game_design/PROMPT_COLLAUDO_GAMEPLAY.md",
+      "sha256": "3d5247afa92c63237886b879268eb6b002ff36bd0cd79a0686948a1d8f2211dd"
+    },
+    {
+      "id": "AST-P-COORDINAMENTO-AI",
+      "title": "Coordinamento di assistenti e sottoattività",
+      "revision": "1.1.0",
+      "category": "05_esecuzione_e_collaborazione",
+      "protocols": [
+        1,
+        3,
+        12
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "coordinamento_su_mandato",
+      "requires": [
+        "lettura_contesto",
+        "strumenti_delega_se_disponibili"
+      ],
+      "selection": {
+        "intents": [
+          "coordinare_assistenti"
+        ],
+        "use_when": [
+          "Scomporre incarichi e coordinare contributi di AI rispettando i ruoli v3."
+        ],
+        "avoid_when": [
+          "La presenza di agenti non autorizza deleghe; per una normale implementazione solitaria usare implementazione controllata."
+        ],
+        "materials": [
+          "obiettivo",
+          "perimetro",
+          "capacita_effettive"
+        ],
+        "examples": [
+          "Come organizzo il confronto fra due assistenti su questo lavoro?"
+        ],
+        "related": [
+          {
+            "id": "AST-P-IMPLEMENTAZIONE",
+            "when": "Quando l’AI primaria deve integrare un piano approvato."
+          }
+        ]
+      },
+      "path": "05_esecuzione_e_collaborazione/PROMPT_COORDINAMENTO_AI.md",
+      "sha256": "132e3eccc0a239a14199fa8ccf2f5c75c2079bf58ae17fad27613c34780f426d"
+    },
+    {
+      "id": "AST-P-DIAGNOSI-TELEMETRIE",
+      "title": "Diagnosi forense di log e telemetrie",
+      "revision": "1.2.0",
+      "category": "02_analisi_e_diagnosi",
+      "protocols": [
+        4,
+        10,
+        12
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_log",
+        "lettura_file",
+        "git_opzionale"
+      ],
+      "selection": {
+        "intents": [
+          "diagnosticare_sessione"
+        ],
+        "use_when": [
+          "Ricostruire un errore o comportamento già osservato partendo da log e telemetrie."
+        ],
+        "avoid_when": [
+          "Per verificare codice contro un piano usare validazione implementazione; per interagire col gioco usare collaudo gameplay."
+        ],
+        "materials": [
+          "log_o_telemetrie",
+          "sessioni",
+          "comportamento_atteso"
+        ],
+        "examples": [
+          "Ho i log delle ultime due sessioni fallite e cerco la causa."
+        ],
+        "related": [
+          {
+            "id": "AST-P-PIANIFICAZIONE",
+            "when": "Dopo la diagnosi, per definire una correzione verificabile."
+          }
+        ]
+      },
+      "path": "02_analisi_e_diagnosi/PROMPT_DIAGNOSI_TELEMETRIE.md",
+      "sha256": "c98d7bd7f506532d37ab81e787f8bab6d30e334ccb45f5a5e30f132c555fa71f"
+    },
+    {
+      "id": "AST-P-ESTRAZIONE-DOCUMENTALE",
+      "title": "Estrazione documentale con provenienza",
+      "revision": "1.1.0",
+      "category": "02_analisi_e_diagnosi",
+      "protocols": [
+        2
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_documenti"
+      ],
+      "selection": {
+        "intents": [
+          "estrarre_dati"
+        ],
+        "use_when": [
+          "Estrarre campi da fonti fornite con provenienza e gestione delle lacune."
+        ],
+        "avoid_when": [
+          "Non serve a completare dati mancanti da Internet o a diagnosticare sessioni software."
+        ],
+        "materials": [
+          "documenti",
+          "campi_richiesti"
+        ],
+        "examples": [
+          "Quale prompt uso per estrarre importi e scadenze da questi documenti?"
+        ],
+        "related": [
+          {
+            "id": "AST-P-RICHIESTA-UNIVERSALE",
+            "when": "Per una semplice sintesi testuale che non richiede estrazione di campi."
+          }
+        ]
+      },
+      "path": "02_analisi_e_diagnosi/PROMPT_ESTRAZIONE_DOCUMENTALE.md",
+      "sha256": "5fbca68e351dc78875ad845f745a7aba0ce8d223380cbc3fbe33c7b10e8d0d5f"
+    },
+    {
+      "id": "AST-P-FORMAZIONE-AI",
+      "title": "Formazione pratica sull'uso dell'AI",
+      "revision": "1.1.0",
+      "category": "06_progettazione_prompt_e_formazione",
+      "protocols": [],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_richiesta"
+      ],
+      "selection": {
+        "intents": [
+          "apprendere_metodo_ai"
+        ],
+        "use_when": [
+          "Apprendere un principio di uso dell’AI mediante un esercizio reale."
+        ],
+        "avoid_when": [
+          "Se l’utente vuole un risultato operativo non trasformare il compito in una lezione."
+        ],
+        "materials": [
+          "tema",
+          "caso_o_esercizio"
+        ],
+        "examples": [
+          "Voglio capire come verificare una risposta dell’AI."
+        ],
+        "related": [
+          {
+            "id": "AST-P-GENERAZIONE-PROMPT",
+            "when": "Quando l’esercizio richiede formulare un incarico preciso."
+          }
+        ]
+      },
+      "path": "06_progettazione_prompt_e_formazione/PROMPT_FORMAZIONE_AI.md",
+      "sha256": "d7fee3de9fab586346912f6a386b710c393115c923885dccbf2b17454569f945"
+    },
+    {
+      "id": "AST-P-GAME-DESIGN",
+      "title": "Progettazione di un gioco accessibile",
+      "revision": "1.1.0",
+      "category": "07_domini/game_design",
+      "protocols": [
+        1,
+        2,
+        12
+      ],
+      "domains": [
+        "giochi"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_materiali"
+      ],
+      "selection": {
+        "intents": [
+          "progettare_gioco"
+        ],
+        "use_when": [
+          "Definire concept, core loop e minimo giocabile di un gioco accessibile."
+        ],
+        "avoid_when": [
+          "Non verifica automaticamente una build esistente e non si applica a domini senza gameplay."
+        ],
+        "materials": [
+          "idea_gioco",
+          "pubblico_e_piattaforma_o_da_definire",
+          "vincoli_accessibilita"
+        ],
+        "examples": [
+          "Ho un’idea di gioco e voglio definirne il minimo giocabile."
+        ],
+        "related": [
+          {
+            "id": "AST-P-COLLAUDO-GAMEPLAY",
+            "when": "Quando esiste una build di test con scenari verificabili."
+          }
+        ]
+      },
+      "path": "07_domini/game_design/PROMPT_PROGETTAZIONE_GIOCO.md",
+      "sha256": "f615e043d7779c4303a285edaec42819ba1be0f1d3e9b6ba8b9c9419931d4d77"
+    },
+    {
+      "id": "AST-P-GENERAZIONE-PROMPT",
+      "title": "Generazione di un prompt operativo",
+      "revision": "1.1.0",
+      "category": "06_progettazione_prompt_e_formazione",
+      "protocols": [
+        1,
+        2
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_richiesta"
+      ],
+      "selection": {
+        "intents": [
+          "creare_prompt"
+        ],
+        "use_when": [
+          "Costruire un prompt nuovo da un obiettivo o adattare un incarico non coperto dal catalogo."
+        ],
+        "avoid_when": [
+          "Se esiste un prompt da migliorare scegliere revisione prompt; non genera automaticamente file o nuove skill."
+        ],
+        "materials": [
+          "obiettivo",
+          "contesto",
+          "destinatario_o_capacita"
+        ],
+        "examples": [
+          "Mi serve un prompt per rivedere lo stile del romanzo rispettando la mia voce."
+        ],
+        "related": [
+          {
+            "id": "AST-P-REVISIONE-PROMPT",
+            "when": "Quando la prima versione presenta un difetto concreto."
+          }
+        ]
+      },
+      "path": "06_progettazione_prompt_e_formazione/PROMPT_GENERAZIONE_PROMPT.md",
+      "sha256": "7ee6c52df53ba347538fffbc7d7bfa6e70e502d5e5bbd8876e30a1591af469f1"
+    },
+    {
+      "id": "AST-P-IDEA-RFC",
+      "title": "Ideazione e chiarimento del bisogno",
+      "revision": "1.0.0",
+      "category": "03_progettazione_e_pianificazione",
+      "protocols": [
+        1
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_materiali",
+        "strumenti_pertinenti_se_autorizzati"
+      ],
+      "selection": {
+        "intents": [
+          "chiarire_idea"
+        ],
+        "use_when": [
+          "Chiarisce un’idea embrionale o un bisogno ancora incompleto prima di scegliere una soluzione."
+        ],
+        "avoid_when": [
+          "Requisito già chiaro, strategia già elaborata, piano esecutivo o implementazione."
+        ],
+        "materials": [
+          "Intuizione o bisogno, destinatari e contesto disponibile; lacune ammesse."
+        ],
+        "examples": [
+          "Ho questa intuizione: aiutami a capire il problema e se vale la pena approfondirla."
+        ],
+        "related": [
+          {
+            "id": "AST-P-STRATEGIA-LOGICA",
+            "when": "Quando occorre sviluppare un modello concettuale del bisogno chiarito."
+          }
+        ]
+      },
+      "path": "03_progettazione_e_pianificazione/PROMPT_IDEA_RFC.md",
+      "sha256": "0af6c15cc4e5ef1943c17d913bfd23641f0708bd395b7951b3894dbdabb214f0"
+    },
+    {
+      "id": "AST-P-IMPLEMENTAZIONE",
+      "title": "Implementazione controllata e autocorrezione",
+      "revision": "1.2.0",
+      "category": "05_esecuzione_e_collaborazione",
+      "protocols": [
+        3,
+        5
+      ],
+      "domains": [
+        "software",
+        "addon_nvda",
+        "utility",
+        "giochi"
+      ],
+      "mode": "esecuzione_su_mandato",
+      "requires": [
+        "lettura_file",
+        "scrittura_file",
+        "runner_se_autorizzato"
+      ],
+      "selection": {
+        "intents": [
+          "implementare_piano"
+        ],
+        "use_when": [
+          "Realizzare un piano approvato entro un mandato con effetti definiti."
+        ],
+        "avoid_when": [
+          "Non usarlo per un semplice consiglio, una review o un piano ancora da validare. Nessuna esecuzione senza mandato."
+        ],
+        "materials": [
+          "piano_approvato",
+          "perimetro",
+          "mandato_operativo"
+        ],
+        "examples": [
+          "Il piano è approvato: voglio affidarne l’implementazione all’AI."
+        ],
+        "related": [
+          {
+            "id": "AST-P-VALIDAZIONE-IMPLEMENTAZIONE",
+            "when": "Dopo il lavoro, per una verifica indipendente."
+          }
+        ]
+      },
+      "path": "05_esecuzione_e_collaborazione/PROMPT_IMPLEMENTAZIONE_CONTROLLATA.md",
+      "sha256": "e15104e10da4ab36c223ea9f33026f5739561ec0a6b1269af99e0f364df56e0a"
+    },
+    {
+      "id": "AST-P-INIT-PROGETTO",
+      "title": "Inizializzazione e adozione in un progetto",
+      "revision": "1.1.0",
+      "category": "01_onboarding_e_governance",
+      "protocols": [
+        9,
+        1
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva_con_applicazione_autorizzata",
+      "requires": [
+        "lettura_file",
+        "git_opzionale",
+        "scrittura_file_per_applicazione"
+      ],
+      "selection": {
+        "intents": [
+          "inizializzare_progetto"
+        ],
+        "use_when": [
+          "Adottare Astralis 3 in un progetto nuovo o esistente preservando la storia."
+        ],
+        "avoid_when": [
+          "Per allineare un progetto già governato a una nuova baseline usare aggiornamento ecosistema."
+        ],
+        "materials": [
+          "radice_progetto",
+          "hub_v3",
+          "assistenti_scelti"
+        ],
+        "examples": [
+          "Come inizializzo questo repository con Astralis?"
+        ],
+        "related": [
+          {
+            "id": "AST-P-UPDATE-ECOSISTEMA",
+            "when": "Se il progetto possiede già governance da aggiornare."
+          }
+        ]
+      },
+      "path": "01_onboarding_e_governance/PROMPT_INIZIALIZZAZIONE_PROGETTO.md",
+      "sha256": "cb232b7debdc07bdacf4eeb7d8619cf0858910a78917b4c18297ec02a5c286dd"
+    },
+    {
+      "id": "AST-P-PIANIFICAZIONE",
+      "title": "Pianificazione proporzionata di un'attività",
+      "revision": "1.2.0",
+      "category": "03_progettazione_e_pianificazione",
+      "protocols": [
+        1,
+        2
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_materiali"
+      ],
+      "selection": {
+        "intents": [
+          "pianificare_attivita",
+          "redigere_piano_tecnico"
+        ],
+        "use_when": [
+          "Definire attività, ordine, dipendenze e criteri prima di agire."
+        ],
+        "avoid_when": [
+          "Se il piano esiste e si vuole verificarlo scegliere validazione piano; se è approvato e si vuole realizzarlo scegliere implementazione."
+        ],
+        "materials": [
+          "attivita",
+          "obiettivo",
+          "vincoli"
+        ],
+        "examples": [
+          "Voglio un piano per riorganizzare questa documentazione."
+        ],
+        "related": [
+          {
+            "id": "AST-P-VALIDAZIONE-PIANO",
+            "when": "Quando la pianificazione produce un piano tecnico da verificare."
+          }
+        ]
+      },
+      "path": "03_progettazione_e_pianificazione/PROMPT_PIANIFICAZIONE_ATTIVITA.md",
+      "sha256": "c65b066f66098b2024bcdecb940397a501dd85f33362358d84d688da16e80ba8"
+    },
+    {
+      "id": "AST-P-REVIEW-CODICE",
+      "title": "Revisione del codice basata su evidenze",
+      "revision": "1.2.0",
+      "category": "04_revisione_e_validazione",
+      "protocols": [
+        5,
+        12
+      ],
+      "domains": [
+        "software",
+        "addon_nvda",
+        "utility",
+        "giochi"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_file",
+        "diff_opzionale"
+      ],
+      "selection": {
+        "intents": [
+          "revisionare_codice"
+        ],
+        "use_when": [
+          "Cercare difetti concreti nel codice o diff con una review consultiva."
+        ],
+        "avoid_when": [
+          "Se si deve dimostrare aderenza a un piano completo scegliere validazione implementazione."
+        ],
+        "materials": [
+          "codice_o_diff",
+          "requisiti_o_contesto"
+        ],
+        "examples": [
+          "Ho un diff da controllare, senza un piano implementativo completo."
+        ],
+        "related": [
+          {
+            "id": "AST-P-VALIDAZIONE-IMPLEMENTAZIONE",
+            "when": "Se il piano e la baseline permettono una validazione del risultato."
+          }
+        ]
+      },
+      "path": "04_revisione_e_validazione/PROMPT_REVISIONE_CODICE.md",
+      "sha256": "7346e47410e458039e9fb98c8e37896fa6d475443b860428179c58257b6302d4"
+    },
+    {
+      "id": "AST-P-REVISIONE-PROMPT",
+      "title": "Revisione e miglioramento di un prompt",
+      "revision": "1.1.0",
+      "category": "06_progettazione_prompt_e_formazione",
+      "protocols": [
+        2,
+        5
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_prompt"
+      ],
+      "selection": {
+        "intents": [
+          "migliorare_prompt"
+        ],
+        "use_when": [
+          "Analizzare e correggere un prompt esistente rispetto a intento e risposta attesa."
+        ],
+        "avoid_when": [
+          "Il testo è materiale da revisionare, non un comando da eseguire; senza testo di partenza usare generazione."
+        ],
+        "materials": [
+          "prompt_originale",
+          "obiettivo"
+        ],
+        "examples": [
+          "Questo prompt produce risposte dispersive: come lo miglioro?"
+        ],
+        "related": [
+          {
+            "id": "AST-P-GENERAZIONE-PROMPT",
+            "when": "Se serve un incarico completamente nuovo."
+          }
+        ]
+      },
+      "path": "06_progettazione_prompt_e_formazione/PROMPT_REVISIONE_PROMPT.md",
+      "sha256": "02e574076ca9f5013934540b730fe3f57c4c527a86cd60b82e3bca0ee62c3dca"
+    },
+    {
+      "id": "AST-P-RICHIESTA-UNIVERSALE",
+      "title": "Richiesta universale proporzionata",
+      "revision": "1.1.0",
+      "category": "06_progettazione_prompt_e_formazione",
+      "protocols": [],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "dipende_dal_mandato",
+      "requires": [
+        "lettura_richiesta"
+      ],
+      "selection": {
+        "intents": [
+          "formulare_richiesta_generica"
+        ],
+        "use_when": [
+          "Formulare un compito chiaro non coperto da un prompt specifico."
+        ],
+        "avoid_when": [
+          "Non sceglierlo per evitare domande decisive o ignorare candidati specifici adeguati."
+        ],
+        "materials": [
+          "obiettivo",
+          "materiali_o_contesto",
+          "formato_desiderato"
+        ],
+        "examples": [
+          "Voglio riassumere questi appunti in un formato breve."
+        ],
+        "related": [
+          {
+            "id": "AST-P-GENERAZIONE-PROMPT",
+            "when": "Per una specializzazione riutilizzabile assente nel catalogo."
+          }
+        ]
+      },
+      "path": "06_progettazione_prompt_e_formazione/PROMPT_RICHIESTA_UNIVERSALE.md",
+      "sha256": "463d96e467d8ea17cf1f5a1a90a30462e0ac505b7ca7b2605f2c708cf0981f2a"
+    },
+    {
+      "id": "AST-P-SETUP-MACCHINA",
+      "title": "Configurazione di una macchina",
+      "revision": "1.1.0",
+      "category": "01_onboarding_e_governance",
+      "protocols": [
+        9
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva_con_applicazione_autorizzata",
+      "requires": [
+        "lettura_file",
+        "scrittura_file_per_applicazione"
+      ],
+      "selection": {
+        "intents": [
+          "configurare_macchina"
+        ],
+        "use_when": [
+          "Configurare Astralis 3 su una macchina e preparare gli assistenti scelti."
+        ],
+        "avoid_when": [
+          "Per un singolo repository già su una macchina configurata preferire inizializzazione progetto."
+        ],
+        "materials": [
+          "hub_v3",
+          "assistenti_scelti",
+          "preferenze_interazione"
+        ],
+        "examples": [
+          "Devo configurare Astralis sul nuovo computer."
+        ],
+        "related": [
+          {
+            "id": "AST-P-INIT-PROGETTO",
+            "when": "Dopo il setup, se si deve adottare Astralis in un repository."
+          }
+        ]
+      },
+      "path": "01_onboarding_e_governance/PROMPT_SETUP_MACCHINA.md",
+      "sha256": "04eec2016bef5531e7a823e1dff31524113f25fd725db7ca333840552acab155"
+    },
+    {
+      "id": "AST-P-STRATEGIA-LOGICA",
+      "title": "Redazione di una strategia logica",
+      "revision": "1.0.0",
+      "category": "03_progettazione_e_pianificazione",
+      "protocols": [
+        1,
+        12
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_materiali",
+        "strumenti_pertinenti_se_autorizzati"
+      ],
+      "selection": {
+        "intents": [
+          "creare_strategia_logica"
+        ],
+        "use_when": [
+          "Costruisce modello mentale, tesi e invarianti di una strategia per un problema compreso ma senza approccio concettuale definito."
+        ],
+        "avoid_when": [
+          "Validazione di una strategia già fornita, piano tecnico dettagliato o hotfix semplice con causa e soluzione note."
+        ],
+        "materials": [
+          "Problema, obiettivo, contesto e vincoli; evidenze o idea di origine se presenti."
+        ],
+        "examples": [
+          "Il bisogno è chiaro: definiamo modello mentale e invarianti prima dei dettagli tecnici."
+        ],
+        "related": [
+          {
+            "id": "AST-P-VALIDAZIONE-STRATEGIA",
+            "when": "Per un giudizio indipendente sulla strategia prodotta."
+          },
+          {
+            "id": "AST-P-PIANIFICAZIONE",
+            "when": "Per tradurre le decisioni e le invarianti nel piano quando il mandato lo comprende."
+          }
+        ]
+      },
+      "path": "03_progettazione_e_pianificazione/PROMPT_STRATEGIA_LOGICA.md",
+      "sha256": "9f9b684dc5a385e7afa10258e78cb41ab70b3c142fcd07aaa3aa0b8c2bb930b5"
+    },
+    {
+      "id": "AST-P-TESTING-COLLAUDO",
+      "title": "Progettazione ed esecuzione di test e collaudo",
+      "revision": "1.0.0",
+      "category": "04_revisione_e_validazione",
+      "protocols": [
+        2,
+        3,
+        4
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "dipende_dal_mandato",
+      "requires": [
+        "lettura_materiali",
+        "strumenti_pertinenti_se_autorizzati"
+      ],
+      "selection": {
+        "intents": [
+          "progettare_test",
+          "realizzare_test",
+          "eseguire_test",
+          "collaudare_software"
+        ],
+        "use_when": [
+          "Progetta, realizza o esegue test e collaudi di software generico secondo modalità e mandato, con prove tracciabili."
+        ],
+        "avoid_when": [
+          "Sola code review, giudizio su una strategia o collaudo delle meccaniche gameplay senza verifiche software generali."
+        ],
+        "materials": [
+          "Requisiti o contratti, codice se disponibile, ambiente, strumenti e mandato; dichiarare materiali mancanti."
+        ],
+        "examples": [
+          "Progetta ed esegui nel workspace di prova i test di regressione per questi contratti."
+        ],
+        "related": [
+          {
+            "id": "AST-P-VALIDAZIONE-IMPLEMENTAZIONE",
+            "when": "Per valutare il risultato complessivo rispetto ai requisiti, oltre alle singole prove."
+          },
+          {
+            "id": "AST-P-COLLAUDO-GAMEPLAY",
+            "when": "Solo per la specializzazione sulle meccaniche di gioco."
+          }
+        ]
+      },
+      "path": "04_revisione_e_validazione/PROMPT_TESTING_COLLAUDO.md",
+      "sha256": "33871e3840a46529f7beb70a31ce672d1599a4fda98db28687fb987b979893a5"
+    },
+    {
+      "id": "AST-P-UPDATE-ECOSISTEMA",
+      "title": "Aggiornamento integrativo dell'ecosistema",
+      "revision": "1.1.0",
+      "category": "01_onboarding_e_governance",
+      "protocols": [
+        8
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva_con_applicazione_autorizzata",
+      "requires": [
+        "lettura_file",
+        "confronto_versioni",
+        "scrittura_file_per_applicazione"
+      ],
+      "selection": {
+        "intents": [
+          "aggiornare_governance"
+        ],
+        "use_when": [
+          "Confrontare o aggiornare governance e personalizzazioni v3 in destinazioni definite."
+        ],
+        "avoid_when": [
+          "Non è una migrazione ad Astralis 4; per un progetto senza governance scegliere inizializzazione."
+        ],
+        "materials": [
+          "sorgente_aggiornamento_v3",
+          "destinazioni",
+          "baseline_o_limite_dichiarato"
+        ],
+        "examples": [
+          "Voglio allineare questi progetti alla governance aggiornata."
+        ],
+        "related": [
+          {
+            "id": "AST-P-INIT-PROGETTO",
+            "when": "Per i candidati onboarding senza governance esistente."
+          }
+        ]
+      },
+      "path": "01_onboarding_e_governance/PROMPT_AGGIORNAMENTO_ECOSISTEMA.md",
+      "sha256": "ce2a7d17c73b0bcfe69997b4e8c02dd7ec30df65ebce4fc7a0a5656ec57c5d1e"
+    },
+    {
+      "id": "AST-P-VALIDAZIONE-IMPLEMENTAZIONE",
+      "title": "Validazione indipendente di un'implementazione",
+      "revision": "1.2.0",
+      "category": "04_revisione_e_validazione",
+      "protocols": [
+        2,
+        5,
+        12
+      ],
+      "domains": [
+        "software",
+        "addon_nvda",
+        "utility",
+        "giochi"
+      ],
+      "mode": "verifica_senza_correzione",
+      "requires": [
+        "lettura_file",
+        "diff_opzionale",
+        "runner_test_se_autorizzato"
+      ],
+      "selection": {
+        "intents": [
+          "validare_implementazione"
+        ],
+        "use_when": [
+          "Confrontare codice realizzato con piano approvato, requisiti e baseline."
+        ],
+        "avoid_when": [
+          "Non serve a definire il piano prima dell’esecuzione; una ricerca della causa nei log richiede diagnosi."
+        ],
+        "materials": [
+          "piano_approvato",
+          "codice_o_diff",
+          "baseline_o_limite_dichiarato"
+        ],
+        "examples": [
+          "L’AI ha finito il codice: rispetta il piano?"
+        ],
+        "related": [
+          {
+            "id": "AST-P-IMPLEMENTAZIONE",
+            "when": "Per correggere difetti dimostrati con un nuovo mandato circoscritto."
+          }
+        ]
+      },
+      "path": "04_revisione_e_validazione/PROMPT_VALIDAZIONE_IMPLEMENTAZIONE.md",
+      "sha256": "ce061be676a2fa2c485fb26e3a3a7dbce3b07f0e542fbfbc9d0a7835037c4f83"
+    },
+    {
+      "id": "AST-P-VALIDAZIONE-PIANO",
+      "title": "Validazione di un piano tecnico",
+      "revision": "1.1.0",
+      "category": "04_revisione_e_validazione",
+      "protocols": [
+        2,
+        12
+      ],
+      "domains": [
+        "software",
+        "addon_nvda",
+        "utility",
+        "giochi"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_piano",
+        "lettura_file"
+      ],
+      "selection": {
+        "intents": [
+          "validare_piano"
+        ],
+        "use_when": [
+          "Verificare fattibilità e tracciabilità dei test di un piano tecnico non ancora applicato."
+        ],
+        "avoid_when": [
+          "Se il codice è già realizzato e si deve controllarne il risultato scegliere validazione implementazione."
+        ],
+        "materials": [
+          "piano_tecnico",
+          "sorgenti_pertinenti_o_limite",
+          "criteri_accettazione"
+        ],
+        "examples": [
+          "Verifica questo piano prima di passarlo all’implementatore."
+        ],
+        "related": [
+          {
+            "id": "AST-P-IMPLEMENTAZIONE",
+            "when": "Solo dopo validazione e mandato operativo dell’utente."
+          }
+        ]
+      },
+      "path": "04_revisione_e_validazione/PROMPT_VALIDAZIONE_PIANO.md",
+      "sha256": "e131bbd41f17537047ee058f4e4c7868fa6848967a36cc4a23afe8137ed5da40"
+    },
+    {
+      "id": "AST-P-VALIDAZIONE-STRATEGIA",
+      "title": "Validazione di una strategia",
+      "revision": "1.1.0",
+      "category": "04_revisione_e_validazione",
+      "protocols": [
+        1,
+        2,
+        12
+      ],
+      "domains": [
+        "trasversale"
+      ],
+      "mode": "consultiva",
+      "requires": [
+        "lettura_materiali",
+        "lettura_file_opzionale"
+      ],
+      "selection": {
+        "intents": [
+          "validare_strategia"
+        ],
+        "use_when": [
+          "Verificare premesse e approccio generale di una strategia prima del piano dettagliato."
+        ],
+        "avoid_when": [
+          "Per sequenza implementativa, fixture e criteri concreti scegliere validazione piano; il verdetto non avvia implementazione."
+        ],
+        "materials": [
+          "strategia",
+          "obiettivi",
+          "fonti_o_baseline"
+        ],
+        "examples": [
+          "Questa strategia risolve davvero il problema?"
+        ],
+        "related": [
+          {
+            "id": "AST-P-PIANIFICAZIONE",
+            "when": "Dopo una strategia valida, per formalizzare il piano."
+          }
+        ]
+      },
+      "path": "04_revisione_e_validazione/PROMPT_VALIDAZIONE_STRATEGIA.md",
+      "sha256": "579a2bdcb88b4470ac84c1ce8c540fcfd3cc61f4dff611bb63f01acafec67b68"
+    }
+  ]
+}

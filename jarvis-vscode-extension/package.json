@@ -1,0 +1,76 @@
+{
+  "name": "jarvis-vscode-extension",
+  "displayName": "JARVIS",
+  "description": "Local sidebar bridge between VS Code and JARVIS.",
+  "version": "0.1.0",
+  "publisher": "jarvis-local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:jarvis.openPanel",
+    "onView:jarvis.sidebar"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "jarvis.openPanel",
+        "title": "JARVIS: Open Panel"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "jarvis",
+          "title": "JARVIS",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "jarvis": [
+        {
+          "id": "jarvis.sidebar",
+          "name": "JARVIS"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "JARVIS",
+      "properties": {
+        "jarvis.wsPort": {
+          "type": "number",
+          "default": 8765,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Local JARVIS WebSocket server port."
+        },
+        "jarvis.wsToken": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Shared token for the local JARVIS WebSocket server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "test": "npm run compile && node --test test/*.test.cjs",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.13",
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^5.7.2"
+  }
+}

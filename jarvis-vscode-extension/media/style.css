@@ -1,0 +1,81 @@
+:root {
+  color-scheme: dark;
+  font-family: var(--vscode-font-family);
+  color: var(--vscode-foreground);
+  background: var(--vscode-sideBar-background);
+}
+
+body {
+  margin: 0;
+  padding: 12px;
+}
+
+#status {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+  min-height: 1.4em;
+  margin-bottom: 10px;
+}
+
+#status.error {
+  color: var(--vscode-errorForeground);
+}
+
+#messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.message {
+  overflow-wrap: anywhere;
+  padding: 8px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+}
+
+.message.user {
+  border-left: 3px solid var(--vscode-button-background);
+}
+
+.message.jarvis {
+  border-left: 3px solid var(--vscode-textLink-foreground);
+}
+
+#composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#messageInput {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+}
+
+button,
+textarea {
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 6px;
+}
+
+button {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+button:disabled,
+textarea:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
