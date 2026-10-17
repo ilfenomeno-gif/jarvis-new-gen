@@ -1925,6 +1925,9 @@ class JarvisLive:
                                 self._recent_user_texts.append(full_in)
                                 self._schedule_geo_route(full_in)
                                 self.ui.write_log(f"You: {full_in}")
+                                from core.ui_panels import wants_chat
+                                if wants_chat(full_in):
+                                    self.ui.show_gemini_chat()
                                 self._session_log.append(f"User: {full_in}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({

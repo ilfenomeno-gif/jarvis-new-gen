@@ -44,7 +44,8 @@ from core.browser_interaction import (
 )
 from core.animations import ScanlineOverlay, start_pulsing_glow
 from core.ui_panels import (
-    DOCKS, LAYOUT_VERSION, PanelState, layout_path, load_layout, resolve, save_layout,
+    DOCKS, LAYOUT_VERSION, PanelState, layout_anomalies, layout_path, load_layout, resolve,
+    save_layout, wants_chat,
 )
 from core.page_reader import PageSpeechWorker, build_page_read_script
 from core.browser_url import is_allowed_http_scheme, normalize_http_url
@@ -3126,7 +3127,11 @@ class MainWindow(QMainWindow):
         data = load_layout(layout_path())
         if data is None:
             return
-        if data["geometry"]:
+        problems = layout_anomalies(data)
+        if problems:
+            self._log_sig.emit(f"UI: layout salvato anomalo ({', '.join(problems)}): uso il default")
+            self.restore_layout()
+            return
             self.restoreGeometry(data["geometry"])
         if not self.restoreState(data["qt_state"], LAYOUT_VERSION):
             self.restoreState(self._default_state, LAYOUT_VERSION)
@@ -3137,6 +3142,9 @@ class MainWindow(QMainWindow):
             self._panel_state.set_visible("input", True)
             self._docks["input"].setVisible(True)
         self._render_panels()
+        # Input must never end up floating, whatever the restored Qt state says.
+        if self._docks["input"].isFloating():
+            self._docks["input"].setFloating(False)
         self._last_saved_layout = repr(
             sorted(self._layout_snapshot().items(), key=lambda kv: kv[0])
         ).encode()
@@ -5661,6 +5669,8 @@ class MainWindow(QMainWindow):
         if not txt: return
         self._input.clear()
         self._log.append_log(f"You: {txt}")
+        if wants_chat(txt):
+            self._show_gemini_chat()
         if self.on_text_command:
             threading.Thread(target=self.on_text_command, args=(txt,), daemon=True).start()
 

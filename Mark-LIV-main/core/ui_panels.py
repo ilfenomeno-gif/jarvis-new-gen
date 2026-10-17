@@ -5,6 +5,7 @@ import base64
 import binascii
 import json
 import os
+import re
 from pathlib import Path
 
 # header/footer/content live in the central area; the DOCKS are movable, closable and floatable.
@@ -67,6 +68,27 @@ class PanelState:
 
     def snapshot(self) -> dict[str, bool]:
         return dict(self._visible)
+
+
+def layout_anomalies(data: dict) -> list[str]:
+    """Why a loaded layout must be ignored. The input dock is never floating by default and
+    must stay reachable: a saved layout that says otherwise is a corrupt or stranded one."""
+    problems = []
+    if (data.get("floating") or {}).get("input"):
+        problems.append("input floating")
+    return problems
+
+
+_CHAT_REQUEST = re.compile(
+    r"\b(apri|aprimi|mostra|mostrami)\s+(la\s+|il\s+)?chat\b|\bparliamo\b|\bparlami\b"
+    r"|\bopen\s+(the\s+)?chat\b|\blet'?s\s+(talk|chat)\b",
+    re.IGNORECASE,
+)
+
+
+def wants_chat(text: str) -> bool:
+    """True when the user explicitly asks for the chat ('apri la chat', 'parliamo')."""
+    return bool(_CHAT_REQUEST.search(str(text or "")))
 
 
 def layout_path() -> Path:
