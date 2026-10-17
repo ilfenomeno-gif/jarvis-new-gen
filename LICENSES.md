@@ -9,7 +9,8 @@ cartella non estende automaticamente i suoi termini alle altre.
 | App JARVIS | CC BY-NC 4.0; uso commerciale non consentito dai termini indicati | [`Mark-LIV-main/LICENSE`](./Mark-LIV-main/LICENSE) |
 | ASTRALIS | Apache-2.0 | [`astralis/LICENSE`](./astralis/LICENSE) |
 | Sorgenti God's Eye View inclusi nel progetto e copie GEV top-level | MIT, con note aggiuntive nel file | [`Mark-LIV-main/gods-eye-view-main/_gev-clone/LICENSE`](./Mark-LIV-main/gods-eye-view-main/_gev-clone/LICENSE) e licenze nelle rispettive copie |
-| Three.js 0.186.1 (incluso minificato in `Mark-LIV-main/assets/viewer3d/viewer.bundle.js`) | MIT, Copyright 2010-2026 three.js authors | [`Mark-LIV-main/assets/viewer3d/README.md`](./Mark-LIV-main/assets/viewer3d/README.md) |
+| Three.js 0.186.1 (incluso minificato in `Mark-LIV-main/assets/viewer3d/viewer.bundle.js`, con GLTFLoader) | MIT, Copyright 2010-2026 three.js authors | [`Mark-LIV-main/assets/viewer3d/README.md`](./Mark-LIV-main/assets/viewer3d/README.md) |
+| tripo3d 1.0.0 (dipendenza opzionale, non inclusa nel repository) | MIT (metadati del pacchetto) | `Mark-LIV-main/requirements-optional.txt` |
 | Estensione VS Code | Nessun file `LICENSE` o campo `license` dichiarato nel `package.json` al momento della verifica | [`jarvis-vscode-extension/package.json`](./jarvis-vscode-extension/package.json) |
 | Documentazione di analisi e altri snapshot | Verificare i singoli file e le attribuzioni; nessuna licenza unica dedotta dalla root | Cartelle rispettive |
 

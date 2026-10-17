@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtTest import QTest
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineScript
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebEngineCore import QWebEngineSettings
 from core.browser_interaction import (
     build_click_link_script, build_keyboard_event_script,
     normalize_link_text, normalize_web_key,
@@ -2976,6 +2977,10 @@ class MainWindow(QMainWindow):
     def _viewer3d_ensure(self):
         if self._viewer3d is None:
             view = QWebEngineView()
+            # The page is our own local file; it must read models/*.glb beside it.
+            view.settings().setAttribute(
+                QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True
+            )
             view.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
@@ -3011,7 +3016,7 @@ class MainWindow(QMainWindow):
             f"(...JSON.parse({json.dumps(args_json)}))"
         )
         self._viewer3d_ensure()
-        if function in ("flyTo", "addMarker", "setFlights"):
+        if function in ("flyTo", "addMarker", "setFlights", "loadModel"):
             self.show_viewer3d(True)
         if self._viewer3d_loaded:
             self._viewer3d.page().runJavaScript(script)

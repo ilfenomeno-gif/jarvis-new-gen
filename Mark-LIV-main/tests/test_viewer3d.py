@@ -156,3 +156,159 @@ def test_tool_load_live_flights_runs_off_ui(monkeypatch):
     def fail(region): raise RuntimeError("OpenSky not reachable: x")
     monkeypatch.setattr(viewer_3d, "fetch_flights", fail)
     assert "not reachable" in viewer_3d.viewer_3d({"mode": "load_live_flights"}, player=P())
+
+
+def test_model_file_validation(tmp_path):
+    from core.viewer3d import model_file
+    from tests.glb_helper import make_glb
+    make_glb(tmp_path / "ok.glb")
+    assert model_file("ok.glb", tmp_path).name == "ok.glb"
+    for bad in ("../ok.glb", "sub/ok.glb", "ok.txt", "", "C:\\x.glb", "missing.glb", "..\\ok.glb"):
+        with pytest.raises(ValueError):
+            model_file(bad, tmp_path)
+    big = tmp_path / "big.glb"
+    big.write_bytes(b"x")
+    import core.viewer3d as v
+    old, v.MAX_MODEL_BYTES = v.MAX_MODEL_BYTES, 0
+    try:
+        with pytest.raises(ValueError):
+            model_file("big.glb", tmp_path)
+    finally:
+        v.MAX_MODEL_BYTES = old
+    assert build_call("loadModel", ["ok.glb"]) == ("loadModel", '["ok.glb"]')
+    with pytest.raises(ValueError):
+        build_call("loadModel", ["../x.glb"])
+
+
+def _poll_state(app, win, until, timeout=40):
+    import json
+    deadline, state = time.time() + timeout, None
+    while time.time() < deadline:
+        box = {}
+        if win._viewer3d_loaded:
+            win._viewer3d.page().runJavaScript(
+                "JSON.stringify(window.jarvisViewer.getState())",
+                lambda v: box.__setitem__("s", v),
+            )
+            t = time.time() + 1
+            while time.time() < t and "s" not in box:
+                app.processEvents()
+            if box.get("s"):
+                state = json.loads(box["s"])
+                if until(state):
+                    return state
+        app.processEvents()
+        time.sleep(0.1)
+    return state
+
+
+def test_real_page_loads_glb_model():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+    from core.viewer3d import MODELS_DIR
+    from tests.glb_helper import make_glb
+
+    MODELS_DIR.mkdir(exist_ok=True)
+    path = MODELS_DIR / "pytest_model.glb"
+    make_glb(path)
+    try:
+        app = QApplication.instance() or QApplication(sys.argv)
+        jarvis = ui_module.JarvisUI("")
+        win = jarvis._win
+        out = viewer_3d.viewer_3d({"mode": "load_model", "model": "pytest_model.glb"}, player=jarvis)
+        assert "loaded" in out
+        state = _poll_state(app, win, lambda s: s["model"]["status"] in ("ready", "error"))
+        assert state["model"]["status"] == "ready", state["model"]
+        assert state["model"]["nodes"] == ["part_a", "part_b"]
+        assert win._hud_cam_stack.currentWidget() is win._viewer3d
+
+        viewer_3d.viewer_3d({"mode": "clear_model"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["status"] == "none")
+        assert state["model"]["status"] == "none"
+        assert "not found" in viewer_3d.viewer_3d({"mode": "load_model", "model": "nope.glb"}, player=jarvis) \
+            or "Invalid" in viewer_3d.viewer_3d({"mode": "load_model", "model": "nope.glb"}, player=jarvis)
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_real_page_explode_and_highlight():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+    from core.viewer3d import MODELS_DIR
+    from tests.glb_helper import make_glb
+
+    MODELS_DIR.mkdir(exist_ok=True)
+    path = MODELS_DIR / "pytest_parts.glb"
+    make_glb(path)
+    try:
+        app = QApplication.instance() or QApplication(sys.argv)
+        jarvis = ui_module.JarvisUI("")
+        win = jarvis._win
+        viewer_3d.viewer_3d({"mode": "load_model", "model": "pytest_parts.glb"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["status"] == "ready")
+        assert state["model"]["parts"] == 2 and state["model"]["moved"] == [0, 0]
+
+        assert "exploded" in viewer_3d.viewer_3d({"mode": "explode_model", "on": True}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["explode"] == 1)
+        assert state["model"]["explode"] == 1 and all(d > 0.1 for d in state["model"]["moved"]), state["model"]
+
+        viewer_3d.viewer_3d({"mode": "highlight_part", "part": "part_a"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["highlight"] == "part_a")
+        assert state["model"]["highlight"] == "part_a" and state["model"]["glowing"] == 1
+        viewer_3d.viewer_3d({"mode": "highlight_part", "part": ""}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["highlight"] == "")
+        assert state["model"]["glowing"] == 0
+
+        viewer_3d.viewer_3d({"mode": "explode_model", "on": False}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["explode"] == 0)
+        assert all(d < 0.001 for d in state["model"]["moved"]), state["model"]
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_explode_highlight_validation():
+    assert build_call("explodeModel", [True]) == ("explodeModel", "[true]")
+    assert build_call("highlightPart", [" turbine "]) == ("highlightPart", '["turbine"]')
+    with pytest.raises(ValueError):
+        build_call("explodeModel", ["yes"])
+    with pytest.raises(ValueError):
+        build_call("highlightPart", [5])
+
+
+def test_real_page_hologram_shader_and_toggle():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+    from core.viewer3d import MODELS_DIR
+    from tests.glb_helper import make_glb
+
+    MODELS_DIR.mkdir(exist_ok=True)
+    path = MODELS_DIR / "pytest_holo.glb"
+    make_glb(path)
+    try:
+        app = QApplication.instance() or QApplication(sys.argv)
+        jarvis = ui_module.JarvisUI("")
+        win = jarvis._win
+        viewer_3d.viewer_3d({"mode": "load_model", "model": "pytest_holo.glb"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["status"] == "ready")
+        assert state["model"]["hologram"] is True
+        if state["webgl"]:
+            time.sleep(1.5)  # let several frames compile and draw the shader
+            state = _poll_state(app, win, lambda s: True)
+            assert state["model"]["shaderError"] == ""
+
+        viewer_3d.viewer_3d({"mode": "highlight_part", "part": "part_b"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["glowing"] == 1)
+        assert state["model"]["glowing"] == 1
+
+        viewer_3d.viewer_3d({"mode": "set_hologram", "on": False}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["hologram"] is False)
+        assert state["model"]["hologram"] is False and state["model"]["glowing"] == 1
+        viewer_3d.viewer_3d({"mode": "set_hologram", "on": True}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["hologram"] is True)
+        assert state["model"]["hologram"] is True and state["model"]["glowing"] == 1
+        assert state["model"]["shaderError"] == ""
+    finally:
+        path.unlink(missing_ok=True)

@@ -7,6 +7,7 @@ Management CLI for connectors and skills.
     python -m core.registry_cli revoke <connector-id>
     python -m core.registry_cli skill-diff <skill>
     python -m core.registry_cli skill-approve <skill> --reviewer <name>
+    python -m core.registry_cli set-tripo-key                 # hidden prompt, for generate_3d_model
 
 Tokens are read with a hidden prompt, never from argv, and stored via SecretStore.
 """
@@ -38,6 +39,7 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
     sub.add_parser("skill-diff").add_argument("skill")
     migrate = sub.add_parser("migrate-api-key")
     migrate.add_argument("--remove-plain", action="store_true")
+    sub.add_parser("set-tripo-key")
     approve = sub.add_parser("skill-approve")
     approve.add_argument("skill")
     approve.add_argument("--reviewer", required=True)
@@ -62,6 +64,13 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
             from core.jarvis_runtime import BASE_DIR
             result = migrate(BASE_DIR / "config", runtime.secrets, args.remove_plain)
             return result if result.startswith("error:") else f"gemini_api_key: {result}"
+        if args.command == "set-tripo-key":
+            from core.model_gen import SECRET_NAME
+            key = read_token("Tripo API key: ").strip()
+            if not key:
+                return "error: empty key, nothing stored"
+            runtime.secrets.set(SECRET_NAME, key)
+            return f"{SECRET_NAME}: stored in the SecretStore"
         if args.command == "skill-diff":
             return json.dumps(runtime.skills.diff(args.skill), indent=2)
         runtime.skills.approve(args.skill, args.reviewer)
