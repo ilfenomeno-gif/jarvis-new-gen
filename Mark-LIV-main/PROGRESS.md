@@ -1,7 +1,12 @@
 # Implementation progress
 
 Source of truth: [`IMPLEMENTATION.md`](./IMPLEMENTATION.md).
-Repository: `ilfenomeno-gif/jarvis-ultimate`.
+Repository: `ilfenomeno-gif/jarvis-new-gen` (app source in `Mark-LIV-main/`).
+
+> Nota storica: preflight, branch, PR e misure sotto descrivono checkout
+> separati del repository `jarvis-ultimate`, osservati nelle date indicate.
+> Non sono lo stato Git corrente né una convalida live del repository
+> consolidato; per test aggiornati esegui i comandi dal README root.
 
 ## Preflight Fase 0 — 2026-10-05 (checkout confermato dall'utente)
 

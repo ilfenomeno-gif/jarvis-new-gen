@@ -1,7 +1,14 @@
 # JARVIS ULTIMATE — FILE IMPLEMENTATIVO MASTER
 
-Repository: https://github.com/ilfenomeno-gif/jarvis-ultimate
+Repository corrente: https://github.com/ilfenomeno-gif/jarvis-new-gen
+Percorso dell'app: `Mark-LIV-main/`
 Scopo: trasformare Jarvis in un hub unificato (browser integrato, interazione attiva con pagine/giochi, screen reader, integrazione NVIDIA).
+
+> Questo piano è stato trasferito da un checkout autonomo di `jarvis-ultimate`.
+> Le cronologie, i branch e gli stati riportati nei documenti collegati sono
+> fotografie storiche; non indicano da soli lo stato o la convalida live del
+> repository consolidato. Per l'avvio e i test correnti, consulta il
+> [README root](../README.md).
 
 > Questo file è la **fonte di verità** del progetto. L'agente lo legge a ogni inizio ciclo e aggiorna `PROGRESS.md` a ogni fine ciclo.
 

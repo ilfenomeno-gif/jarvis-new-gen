@@ -84,7 +84,7 @@ dell'audio, di Gemini o dei provider dati GEV.
 | [`.github/copilot-instructions.md`](./.github/copilot-instructions.md) | Istruzioni condivise per l'assistenza al codice nel workspace |
 
 Per dettagli e passaggi di sviluppo, consulta
-[`Mark-LIV-main/README.md`](./Mark-LIV-main/README.md) e
+[`Mark-LIV-main/readme.md`](./Mark-LIV-main/readme.md) e
 [`Mark-LIV-main/IMPLEMENTATION.md`](./Mark-LIV-main/IMPLEMENTATION.md).
 L'archivio GEV descrive fotografie precedenti del lavoro: non usare la
 percentuale riportata nei suoi documenti come misura dello stato corrente.

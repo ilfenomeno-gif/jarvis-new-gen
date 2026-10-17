@@ -1,8 +1,12 @@
-# Repository map — JARVIS Ultimate
+# Mappa del progetto desktop JARVIS
 
 Ricognizione M0 eseguita il 2026-10-04 sul checkout locale del repository
 `ilfenomeno-gif/jarvis-ultimate`, originariamente sul branch
 `feat/m00-repo-discovery`. I cicli successivi usano un branch dedicato ciascuno.
+
+> Questa è la mappa storica della sottocartella app, ora inclusa in
+> `jarvis-new-gen/Mark-LIV-main/`. I branch e i dettagli macchina qui sotto
+> descrivono la ricognizione dell'epoca, non l'albero Git corrente.
 
 ## Struttura
 
