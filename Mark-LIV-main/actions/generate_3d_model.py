@@ -61,7 +61,7 @@ TOOL = {
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            "prompt": {"type": "STRING", "description": "What to create, max 300 characters."},
+            "prompt": {"type": "STRING", "description": "What to create, ideally in English (the image models understand it best), e.g. 'a wooden chair'. Max 300 characters."},
             "show": {"type": "BOOLEAN", "description": "Show it right away (default true)."},
             "engine": {
                 "type": "STRING",

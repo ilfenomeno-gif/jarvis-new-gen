@@ -11,14 +11,17 @@ import gc
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 RESULT_PREFIX = "JARVIS_RESULT "
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.prompt_3d import build_image_prompt  # noqa: E402
+
 TEXT2IMG_MODEL = os.environ.get("JARVIS_3D_TEXT2IMG", "stabilityai/sd-turbo")
 TRIPOSR_MODEL = os.environ.get("JARVIS_3D_TRIPOSR", "stabilityai/TripoSR")
 # (marching-cubes resolution, chunk size): retried smaller after an out-of-memory
 QUALITY_STEPS = [(256, 8192), (192, 4096), (128, 2048)]
-PROMPT_SUFFIX = ", single object, centered, plain white background, studio lighting, high detail"
 
 
 def emit(payload: dict) -> None:
@@ -57,14 +60,26 @@ def _free(torch) -> None:
         torch.cuda.empty_cache()
 
 
-def _text_to_image(prompt: str, torch):
+def candidate_count() -> int:
+    try:
+        return max(1, min(6, int(os.environ.get("JARVIS_3D_CANDIDATES", "3"))))
+    except ValueError:
+        return 3
+
+
+def _text_to_images(prompt: str, torch, count: int) -> list:
     from diffusers import AutoPipelineForText2Image
     pipe = AutoPipelineForText2Image.from_pretrained(TEXT2IMG_MODEL, torch_dtype=torch.float16, variant="fp16")
     pipe.to("cuda")
     try:
-        # SD-Turbo is distilled for one step without guidance
-        return pipe(prompt=prompt + PROMPT_SUFFIX, num_inference_steps=2, guidance_scale=0.0,
-                    width=512, height=512).images[0]
+        images = []
+        for _ in range(count):
+            seed = int.from_bytes(os.urandom(4), "little")
+            generator = torch.Generator("cuda").manual_seed(seed)
+            # SD-Turbo is distilled for one step without guidance
+            images.append(pipe(prompt=prompt, num_inference_steps=2, guidance_scale=0.0,
+                               width=512, height=512, generator=generator).images[0])
+        return images
     finally:
         del pipe
         _free(torch)
@@ -99,21 +114,79 @@ def _install_marching_cubes_fallback() -> None:
     sys.modules["torchmcubes"] = module
 
 
-def _image_to_mesh(image, torch):
+def debug_dir() -> Path:
+    path = Path(os.environ.get("JARVIS_3D_DEBUG_DIR") or tempfile.gettempdir())
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def cutout_stats(alpha) -> dict:
+    """Coverage of the rembg mask: how much of the frame is object, and how crisp the edge is."""
+    import numpy as np
+    a = np.asarray(alpha).astype(np.float32) / 255.0
+    solid = float((a > 0.9).mean())
+    soft = float(((a > 0.1) & (a <= 0.9)).mean())
+    ys, xs = np.where(a > 0.5)
+    box = [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())] if len(xs) else None
+    return {"object_ratio": round(float((a > 0.5).mean()), 3), "solid": round(solid, 3),
+            "soft_edge": round(soft, 3), "bbox": box}
+
+
+def score_cutout(alpha) -> float:
+    """Heuristic 0..1: one dominant, centred, well-framed object scores high; blobs, crops and empty masks low."""
+    import numpy as np
+    from scipy import ndimage
+    mask = np.asarray(alpha) > 127
+    total = mask.size
+    ratio = float(mask.sum()) / total
+    if ratio < 0.05:
+        return 0.0
+    labels, count = ndimage.label(mask)
+    sizes = ndimage.sum(mask, labels, range(1, count + 1))
+    dominance = float(max(sizes)) / float(mask.sum())
+    ys, xs = np.where(mask)
+    h, w = mask.shape
+    touches = int(xs.min() == 0) + int(ys.min() == 0) + int(xs.max() == w - 1) + int(ys.max() == h - 1)
+    cx, cy = (xs.mean() / w - 0.5), (ys.mean() / h - 0.5)
+    off_center = min(1.0, (cx * cx + cy * cy) ** 0.5 * 2)
+    size_fit = 1.0 - min(1.0, abs(ratio - 0.3) / 0.3)
+    return round(max(0.0, 0.4 * dominance + 0.3 * size_fit + 0.3 * (1 - off_center) - 0.25 * touches), 3)
+
+
+def _pick_cutout(images, session):
+    """rembg every candidate, return (index, best cutout, scores)."""
+    import numpy as np
+    from tsr.utils import remove_background
+    cuts = [remove_background(image, session) for image in images]
+    scores = [score_cutout(np.array(cut)[:, :, 3]) for cut in cuts]
+    best = max(range(len(cuts)), key=lambda i: scores[i])
+    return best, cuts[best], scores
+
+
+def _image_to_mesh(images, torch):
     _install_marching_cubes_fallback()
     sys.path.insert(0, str(triposr_dir()))
     import numpy as np
     import rembg
     from PIL import Image
     from tsr.system import TSR
-    from tsr.utils import remove_background, resize_foreground
+    from tsr.utils import resize_foreground
 
     session = rembg.new_session()
-    cut = resize_foreground(remove_background(image, session), 0.85)
+    out = debug_dir()
+    for number, candidate in enumerate(images):
+        candidate.save(out / f"jarvis_3d_debug_candidate{number}.png")
+    best, cut, scores = _pick_cutout(images, session)
+    images[best].save(out / "jarvis_3d_debug.png")
+    print("CANDIDATES " + json.dumps({"scores": scores, "chosen": best}), flush=True)
+    cut.save(out / "jarvis_3d_debug_cutout.png")
+    cut = resize_foreground(cut, 0.85)
     arr = np.array(cut).astype(np.float32) / 255.0
+    stats = cutout_stats(arr[:, :, 3] * 255.0)
     arr = arr[:, :, :3] * arr[:, :, 3:4] + (1 - arr[:, :, 3:4]) * 0.5
     prepared = Image.fromarray((arr * 255.0).astype(np.uint8))
-
+    prepared.save(out / "jarvis_3d_debug_tripo_input.png")
+    print("CUTOUT " + json.dumps(stats), flush=True)
     model = TSR.from_pretrained(TRIPOSR_MODEL, config_name="config.yaml", weight_name="model.ckpt")
     model.to("cuda")
     try:
@@ -146,16 +219,18 @@ def generate(prompt: str, out: Path) -> dict:
     if not torch.cuda.is_available():
         return {"ok": False, "code": "no_cuda", "message": "no CUDA GPU available"}
     try:
-        image = _text_to_image(prompt, torch)
-        image.save(out.with_suffix(".png"))
-        mesh = _to_gltf_y_up(_image_to_mesh(image, torch))
+        image_prompt, report = build_image_prompt(prompt)
+        print("IMAGE_PROMPT " + json.dumps({"prompt": image_prompt, **report}), flush=True)
+        images = _text_to_images(image_prompt, torch, candidate_count())
+        mesh = _to_gltf_y_up(_image_to_mesh(images, torch))
         mesh.export(str(out))
     except torch.cuda.OutOfMemoryError:
         _free(torch)
         return {"ok": False, "code": "oom", "message": "CUDA out of memory"}
     except Exception as exc:
         return {"ok": False, "code": "error", "message": f"{type(exc).__name__}: {exc}"[:400]}
-    return {"ok": True, "path": str(out), "vertices": int(len(mesh.vertices)), "faces": int(len(mesh.faces))}
+    return {"ok": True, "path": str(out), "vertices": int(len(mesh.vertices)), "faces": int(len(mesh.faces)),
+            "image_prompt": image_prompt}
 
 
 def main(argv=None) -> int:
