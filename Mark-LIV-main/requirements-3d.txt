@@ -20,4 +20,3 @@ omegaconf>=2.3
 einops>=0.7
 huggingface-hub>=0.23,<1
 scikit-image>=0.22
-scipy>=1.11

@@ -132,18 +132,37 @@ def cutout_stats(alpha) -> dict:
             "soft_edge": round(soft, 3), "bbox": box}
 
 
+def _largest_component_share(mask) -> float:
+    """Share of the object pixels in its biggest 4-connected blob (numpy only, on a coarse grid)."""
+    step = max(1, min(mask.shape) // 64)
+    grid = mask[::step, ::step]
+    seen = ~grid
+    best = 0
+    for y, x in zip(*grid.nonzero()):
+        if seen[y, x]:
+            continue
+        seen[y, x] = True
+        stack, size = [(y, x)], 0
+        while stack:
+            cy, cx = stack.pop()
+            size += 1
+            for ny, nx in ((cy + 1, cx), (cy - 1, cx), (cy, cx + 1), (cy, cx - 1)):
+                if 0 <= ny < grid.shape[0] and 0 <= nx < grid.shape[1] and not seen[ny, nx]:
+                    seen[ny, nx] = True
+                    stack.append((ny, nx))
+        best = max(best, size)
+    return best / max(1, int(grid.sum()))
+
+
 def score_cutout(alpha) -> float:
     """Heuristic 0..1: one dominant, centred, well-framed object scores high; blobs, crops and empty masks low."""
     import numpy as np
-    from scipy import ndimage
     mask = np.asarray(alpha) > 127
     total = mask.size
     ratio = float(mask.sum()) / total
     if ratio < 0.05:
         return 0.0
-    labels, count = ndimage.label(mask)
-    sizes = ndimage.sum(mask, labels, range(1, count + 1))
-    dominance = float(max(sizes)) / float(mask.sum())
+    dominance = _largest_component_share(mask)
     ys, xs = np.where(mask)
     h, w = mask.shape
     touches = int(xs.min() == 0) + int(ys.min() == 0) + int(xs.max() == w - 1) + int(ys.max() == h - 1)
