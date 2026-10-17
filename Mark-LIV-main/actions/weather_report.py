@@ -49,3 +49,18 @@ def _log(message: str, player=None) -> None:
             player.write_log(f"JARVIS: {message}")
         except Exception:
             pass
+
+
+TOOL = {
+    "name": "weather_report",
+    "description": "Gives the weather report to user",
+    "risk_class": "read",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "city": {"type": "STRING", "description": "City name"}
+        },
+        "required": ["city"]
+    },
+    "handler": weather_action,
+}

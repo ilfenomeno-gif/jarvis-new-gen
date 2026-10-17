@@ -57,9 +57,6 @@ from memory.memory_manager import (
 from actions.file_processor import file_processor
 from actions.flight_finder     import flight_finder
 from actions.open_app          import open_app
-from actions.weather_report    import weather_action
-from actions.send_message      import send_message
-from actions.reminder          import reminder
 from actions.computer_settings import computer_settings
 from actions.screen_processor  import _capture_camera, _capture_screen
 from actions.youtube_video     import youtube_video
@@ -305,43 +302,6 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {},
-        }
-    },
-    {
-        "name": "weather_report",
-        "description": "Gives the weather report to user",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "city": {"type": "STRING", "description": "City name"}
-            },
-            "required": ["city"]
-        }
-    },
-    {
-        "name": "send_message",
-        "description": "Sends a text message via WhatsApp, Telegram, or other messaging platform.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "receiver":     {"type": "STRING", "description": "Recipient contact name"},
-                "message_text": {"type": "STRING", "description": "The message to send"},
-                "platform":     {"type": "STRING", "description": "Platform: WhatsApp, Telegram, etc."}
-            },
-            "required": ["receiver", "message_text", "platform"]
-        }
-    },
-    {
-        "name": "reminder",
-        "description": "Sets a timed reminder using Task Scheduler.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "date":    {"type": "STRING", "description": "Date in YYYY-MM-DD format"},
-                "time":    {"type": "STRING", "description": "Time in HH:MM format (24h)"},
-                "message": {"type": "STRING", "description": "Reminder message text"}
-            },
-            "required": ["date", "time", "message"]
         }
     },
     {
@@ -1543,10 +1503,6 @@ class JarvisLive:
                 link_text = self.ui.click_link_in_webview(args.get("link_text"))
                 result = f"Requested click on the visible link '{link_text}'."
 
-            elif name == "weather_report":
-                r = await loop.run_in_executor(None, lambda: weather_action(parameters=args, player=self.ui))
-                result = r or "Weather delivered."
-
             elif name == "browser_control":
                 r = await loop.run_in_executor(None, lambda: browser_control(parameters=args, player=self.ui))
                 result = r or "Done."
@@ -1569,14 +1525,6 @@ class JarvisLive:
             elif name == "file_controller":
                 r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
                 result = r or "Done."
-
-            elif name == "send_message":
-                r = await loop.run_in_executor(None, lambda: send_message(parameters=args, response=None, player=self.ui, session_memory=None))
-                result = r or f"Message sent to {args.get('receiver')}."
-
-            elif name == "reminder":
-                r = await loop.run_in_executor(None, lambda: reminder(parameters=args, response=None, player=self.ui))
-                result = r or "Reminder set."
 
             elif name == "youtube_video":
                 r = await loop.run_in_executor(None, lambda: youtube_video(parameters=args, response=None, player=self.ui))

@@ -335,3 +335,20 @@ def reminder(
 
     friendly_time = target_dt.strftime("%B %d at %I:%M %p")
     return f"Reminder set for {friendly_time}."
+
+
+TOOL = {
+    "name": "reminder",
+    "description": "Sets a timed reminder using Task Scheduler.",
+    "risk_class": "write",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "date":    {"type": "STRING", "description": "Date in YYYY-MM-DD format"},
+            "time":    {"type": "STRING", "description": "Time in HH:MM format (24h)"},
+            "message": {"type": "STRING", "description": "Reminder message text"}
+        },
+        "required": ["date", "time", "message"]
+    },
+    "handler": reminder,
+}

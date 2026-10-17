@@ -7,10 +7,19 @@ const {
   completeChatHistory,
   isChatHistory,
   parseServerMessage,
+  parseToolPrompt,
   reconnectDelay,
   shouldReconnect,
 } = require("../dist/protocol.js");
 const chatState = require("../src/webview/chat-state.js");
+
+test("validates the prompt accepted by the language model tool", () => {
+  assert.equal(parseToolPrompt({ prompt: "  ciao " }), "ciao");
+  assert.throws(() => parseToolPrompt({}), /prompt/);
+  assert.throws(() => parseToolPrompt({ prompt: "  " }), /prompt/);
+  assert.throws(() => parseToolPrompt({ prompt: "x".repeat(4001) }), /4000/);
+  assert.throws(() => parseToolPrompt(null), /prompt/);
+});
 
 test("parses status and reply protocol messages", () => {
   assert.deepEqual(

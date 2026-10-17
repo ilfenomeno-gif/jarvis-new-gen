@@ -21,3 +21,8 @@ node_modules/
 dist/
 .next/
 coverage/
+Mark-LIV-main/config/api_keys.json
+Mark-LIV-main/config/secrets.json
+Mark-LIV-main/config/audit.jsonl
+Mark-LIV-main/config/connectors_state.json
+Mark-LIV-main/config/skills_state.json

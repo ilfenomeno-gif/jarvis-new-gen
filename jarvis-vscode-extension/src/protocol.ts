@@ -1,3 +1,6 @@
+export const MAX_TOOL_PROMPT_CHARS = 4000;
+export const TOOL_TIMEOUT_MS = 60_000;
+
 export type ServerMessage =
   | { type: "auth_ok" }
   | { type: "pong" }
@@ -8,6 +11,20 @@ export type ChatTurn = {
   role: "user" | "model";
   parts: Array<{ text: string }>;
 };
+
+export function parseToolPrompt(input: unknown): string {
+  const prompt =
+    typeof input === "object" && input !== null && "prompt" in input
+      ? (input as { prompt: unknown }).prompt
+      : undefined;
+  if (typeof prompt !== "string" || !prompt.trim()) {
+    throw new Error("Il tool richiede un campo 'prompt' non vuoto.");
+  }
+  if (prompt.length > MAX_TOOL_PROMPT_CHARS) {
+    throw new Error(`Il prompt supera ${MAX_TOOL_PROMPT_CHARS} caratteri.`);
+  }
+  return prompt.trim();
+}
 
 export const MAX_HISTORY_TURNS = 20;
 export const MAX_RECONNECT_ATTEMPTS = 3;

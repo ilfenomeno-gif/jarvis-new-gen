@@ -9,8 +9,8 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 - `ActionRegistry` (`Mark-LIV-main/core/action_loader.py`) collegato a `main.py`; solo `vscode_agent.py` e `vscode_control.py` espongono `TOOL`.
 - `PluginRegistry` (`core/plugin_loader.py`) con client MCP GEV; `ws_server.py` loopback autenticato.
 - Estensione VS Code: token in `SecretStorage`.
-- `main.py` ha ancora ~35 rami `elif name == ...` e `TOOL_DECLARATIONS` statici.
-- Non esistono: skill dichiarative, catalogo connettori, SecretStore/ScopeManager Python, audit, LM Tools, `VoiceTransport`, MCP esposto dai plugin.
+- `main.py` ha ancora rami `elif name == ...` statici (vedi inventario in Fase 1).
+- Aggiunti nelle fasi 1-6: registry con `risk_class`, `SecretStore`, audit, connettori, skill, router, trasporti MCP, server MCP, LM Tool, `VoiceTransport`.
 
 ## Fase 0: Fondamenta (completata, da committare)
 
@@ -20,56 +20,61 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 - [x] Job CI `vscode-extension`
 - [x] Commit + push + CI remota verde (commit `5dee2ea`, job jarvis/gev/vscode-extension success)
 
-## Fase 1: Normalizzare i tool
+## Fase 1: Normalizzare i tool (parziale: infrastruttura completa, migrazione graduale)
 
-- [ ] Inventario dei rami statici di `_execute_tool` con classificazione (azione / plugin / core)
-- [ ] Migrare gradualmente i rami in `actions/*.py` con `TOOL` (un gruppo per volta, test a ogni gruppo)
-- [ ] Campo `risk_class` (`read`, `write`, `destructive`) nel contratto `TOOL`
-- [ ] Conferma utente per `destructive`
-- [ ] Rimuovere `TOOL_DECLARATIONS` duplicate quando un tool è migrato
-- Accettazione: suite JARVIS verde, nessun cambio di comportamento osservabile.
+- [x] Inventario dei rami statici di `_execute_tool`. Già nel registry: `weather_report`, `send_message`, `reminder`, `vscode_*`. Restano statici (da migrare a gruppi): `open_app`, `browser_control`, `file_controller`, `youtube_video`, `computer_settings`, `desktop_control`, `code_helper`, `dev_agent`, `large_file_reader`, `proxy_launcher`, `computer_control`, `game_updater`, `flight_finder`, agenti. Restano core per scelta: `save_memory`, `recall_memory`, `undo`, `open_website`, `press_key`, `click_link`, `read_page`, `stop_reading`, `screen_process`, `close_camera`, `web_search`, `file_processor`, `system_status`, `manage_monitor`, `shutdown_jarvis` (dipendono dallo stato interno di `main.py`)
+- [x] Migrati 3 tool (`weather_report`, `send_message`, `reminder`) con rimozione di dichiarazione, ramo e import da `main.py`
+- [x] Campo `risk_class` (`read`, `write`, `destructive`) nel contratto `TOOL`, validato
+- [x] Conferma per `destructive`: parametro `confirmed` aggiunto alla dichiarazione, esecuzione rifiutata senza `confirmed=true`
+- [ ] Migrare i rami statici rimanenti elencati sopra (lavoro ripetibile, un gruppo per volta; ogni migrazione = `TOOL` nel modulo + rimozione ramo/dichiarazione)
+- Accettazione: suite JARVIS verde (fatto).
 
-## Fase 2: Sicurezza (prima di qualsiasi UI)
+## Fase 2: Sicurezza
 
-- [ ] `SecretStore` Python (keyring/DPAPI) per token OAuth e API key; migrare `config/api_keys.json`
-- [ ] `ScopeManager`: scope dichiarati nel descrittore, verificati prima di ogni chiamata
-- [ ] Restringere whitelist `node`/`node.exe` del plugin GEV e verificare la fonte del runtime
-- [ ] Audit log per ogni chiamata tool (skill di provenienza, scope, esito)
-- [ ] Revoca: invalida i token e disabilita le skill dipendenti
-- Accettazione: nessun segreto in chiaro nel repository o nei file di config; test su scope negati.
+- [x] `SecretStore` (`core/secret_store.py`): DPAPI Windows, nessun fallback in chiaro, backend iniettabile
+- [ ] Migrare `config/api_keys.json` nel `SecretStore`: NON fatto, il resto del codice legge ancora quel file (ora in `.gitignore`)
+- [x] `ScopeManager` (`core/connectors.py`): scope dichiarati nel descrittore, concessi dall'utente, verificati a ogni chiamata
+- [x] Whitelist `node`: il plugin GEV invoca solo il `node.exe` portatile atteso (controllo già in `gev_plugin.py`); la whitelist generale in `guardrails.py` resta perché `code_helper` esegue `.js`
+- [x] Audit log JSONL (`core/audit_log.py`) con redazione di token/segreti negli argomenti
+- [x] Revoca: cancella il token, azzera gli scope, porta le skill dipendenti a `review_required` (anche dopo riavvio)
+- Accettazione: test su scope negati, segreti non in chiaro, audit (fatto).
 
-## Fase 3: Catalogo connettori (`MCPRegistry`)
+## Fase 3: Catalogo connettori
 
-- [ ] Schema descrittore: `id`, `name`, `type`, `transport`, `auth`, `status`, `scopes`, `tool_refs`
-- [ ] Stato persistente ispezionabile (JSON/SQLite)
-- [ ] Interfaccia `ConnectorAuth`: `begin_oauth()`, `refresh()`, `revoke()`, `status()`
-- [ ] Avvio e discovery dei tool MCP con namespace stabile (`gmail.search`)
-- [ ] Primi connettori esistenti: Google Workspace, GitHub, Spotify; poi Canva, Higgsfield (remoti OAuth)
-- Accettazione: connettore finto di test passa enable → authenticate → scope → revoke.
+- [x] Descrittore `ConnectorDescriptor` con validazione; catalogo in `connectors/catalog/*.json` (Google Workspace, GitHub, Spotify, Canva, Higgsfield)
+- [x] Stato persistente ispezionabile (`config/connectors_state.json`, gitignored)
+- [x] `ConnectorAuth` (`begin_oauth`, `complete`, `refresh`, `revoke`, `status`) + implementazione `SecretStoreAuth`
+- [x] Trasporti (`core/mcp_transport.py`): HTTP streamable con handshake `initialize`, Bearer, risposta JSON o SSE, solo https (http su loopback); stdio riusando `McpStdioClient`
+- [x] Namespace stabile `gmail.search`, mappato al nome nudo del server
+- [ ] Flusso OAuth interattivo reale (browser + redirect + refresh) e verifica contro server veri: NON fatto. Oggi il token si inserisce con `registry_cli connect`. I nomi dei tool/scope del catalogo sono un contratto dichiarato, non verificato contro i server reali. Per Google, Canva, Spotify manca l'endpoint
+- Accettazione: ciclo enable → authenticate → scope → revoke testato con connettore del catalogo (fatto).
 
-## Fase 4: Skill dichiarative (`SkillRegistry`)
+## Fase 4: Skill dichiarative
 
-- [ ] Struttura `skills/<nome>/SKILL.md` + `reference.md` opzionale + `examples/`
-- [ ] Formato `SKILL.md` con frontmatter `name`, `description` (+ `tool_refs`, `risk_class`)
-- [ ] Progressive disclosure: precarico solo metadati; corpo al trigger; riferimenti su richiesta
-- [ ] Risoluzione `tool_refs` solo all'attivazione; segnalare connettore non connesso
-- [ ] Ciclo di vita (`draft`, `active`, `review_required`, `archived`) e gate su espansione di scope
-- [ ] Prima skill di esempio in sola lettura (briefing)
-- [ ] Migrare le skill esistenti al formato
-- Accettazione: test su parsing, trigger, gate scope.
+- [x] `skills/<nome>/SKILL.md`, frontmatter `name`, `description`, `triggers`, `tool_refs`, `risk_class`, `status`
+- [x] Progressive disclosure su tre livelli (metadati, corpo, riferimenti confinati nella cartella)
+- [x] `tool_refs` risolti solo all'attivazione, connettore mancante segnalato
+- [x] Gate: una skill `active` senza approvazione, o con permessi cambiati, diventa `review_required`; `approve` richiede un revisore; `diff` mostra i permessi aggiunti
+- [x] Skill di esempio in sola lettura: `google-workspace-briefing`
+- [x] Nessuna skill preesistente da migrare nel repository
+- Accettazione: test su parsing, gate, riferimenti, revoca (fatto).
 
 ## Fase 5: Router e orchestrazione
 
-- [ ] Router a due assi: intento, poi skill
-- [ ] `TaskRunner` con checkpoint e audit
-- [ ] Workflow engine solo se emergono workflow concreti (non anticipare)
+- [x] `SkillRouter` a due assi (intento, poi skill) in `core/skill_router.py`
+- [x] Esposizione al modello: tool `use_skill`, `connectors_status`, `connector_call` (auto-scoperti), tutti con audit
+- [x] CLI di gestione `core/registry_cli.py` (`status`, `connect`, `grant`, `revoke`, `skill-diff`, `skill-approve`), token con prompt nascosto
+- [x] `TaskRunner` e workflow engine: scelta di NON costruirli. `prepare` + audit coprono il caso; riconsiderare solo con workflow concreti
+- Classificazione intento: euristica a parole chiave, non un modello
 
 ## Fase 6: Superfici
 
-- [ ] LM Tools in VS Code (`vscode.lm.registerTool`) sopra il bridge WebSocket
-- [ ] Plugin esposti come server MCP
-- [ ] `VoiceTransport` astratto
-- [ ] Pannelli Connectors / Skills come proiezione dello stato del registry
+- [x] LM Tool `jarvis_ask` in VS Code (`vscode.lm.registerTool`) sopra il bridge WebSocket autenticato, con conferma, timeout e annullamento (richiede VS Code 1.101+, `engines`/`@types` aggiornati)
+- [x] Azioni esposte come server MCP stdio: `python -m core.mcp_server` (solo `read` di default; `--allow-write` aggiunge `write`; `destructive` mai)
+- [x] `VoiceTransport` astratto + `NullTransport` (`core/voice_transport.py`)
+- [ ] Integrare `VoiceTransport` nella sessione Gemini Live di `main.py`: NON fatto, è solo l'interfaccia
+- [ ] Pannelli grafici Connectors/Skills: NON fatti. La proiezione di stato esiste (`ConnectorRegistry.view()`, `SkillRegistry.view()`, tool `connectors_status`, `registry_cli status`)
+- [ ] Prova manuale del LM Tool dentro VS Code: NON eseguita (verificati compilazione e test del protocollo)
 
 ## Comandi di verifica
 
@@ -82,3 +87,4 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 | Data | Step | Esito |
 |------|------|-------|
 | 2026-10-17 | Fase 0 | JARVIS 347 passed; estensione 10 passed (locale); CI remota su `5dee2ea`: jarvis, gev, vscode-extension tutti success |
+| 2026-10-17 | Fasi 1-6 | JARVIS 366 passed; estensione 11 passed + `npm ci --dry-run` ok; `py_compile main.py` ok; DPAPI roundtrip reale ok; trasporto HTTP provato contro un server locale di prova |

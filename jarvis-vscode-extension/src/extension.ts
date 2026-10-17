@@ -6,8 +6,10 @@ import {
   isChatHistory,
   MAX_RECONNECT_ATTEMPTS,
   parseServerMessage,
+  parseToolPrompt,
   reconnectDelay,
   shouldReconnect,
+  TOOL_TIMEOUT_MS,
 } from "./protocol";
 
 const VIEW_ID = "jarvis.sidebar";
@@ -25,8 +27,62 @@ class JarvisViewProvider implements vscode.WebviewViewProvider, vscode.Disposabl
   private authenticated = false;
   private legacyTokenCleanupWarningShown = false;
   private readonly pendingChats = new Map<string, string>();
+  private readonly askWaiters = new Map<
+    string,
+    { resolve: (text: string) => void; reject: (error: Error) => void }
+  >();
 
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  ask(prompt: string, cancellation?: vscode.CancellationToken): Promise<string> {
+    if (!this.authenticated || this.socket?.readyState !== WebSocket.OPEN) {
+      return Promise.reject(
+        new Error("JARVIS è offline o non autenticato: apri il pannello JARVIS e imposta il token."),
+      );
+    }
+    if (this.pendingChats.size > 0) {
+      return Promise.reject(new Error("Attendi la risposta alla richiesta in corso."));
+    }
+    const socket = this.socket;
+    const id = `lm-${randomBytes(6).toString("hex")}`;
+    const request = buildChatRequest(id, prompt, []);
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(
+        () => this.settleAsk(id, new Error("JARVIS non ha risposto in tempo.")),
+        TOOL_TIMEOUT_MS,
+      );
+      const subscription = cancellation?.onCancellationRequested(() =>
+        this.settleAsk(id, new Error("Richiesta annullata.")),
+      );
+      const finish = () => {
+        clearTimeout(timer);
+        subscription?.dispose();
+      };
+      this.askWaiters.set(id, {
+        resolve: (text) => {
+          finish();
+          resolve(text);
+        },
+        reject: (error) => {
+          finish();
+          reject(error);
+        },
+      });
+      this.pendingChats.set(id, request.text);
+      try {
+        socket.send(JSON.stringify(request));
+      } catch (error) {
+        this.settleAsk(id, error instanceof Error ? error : new Error("Invio non riuscito."));
+      }
+    });
+  }
+
+  private settleAsk(id: string, error: Error): void {
+    this.pendingChats.delete(id);
+    const waiter = this.askWaiters.get(id);
+    this.askWaiters.delete(id);
+    waiter?.reject(error);
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -83,6 +139,9 @@ class JarvisViewProvider implements vscode.WebviewViewProvider, vscode.Disposabl
     this.socket?.close();
     this.socket = undefined;
     this.authenticated = false;
+    for (const id of [...this.askWaiters.keys()]) {
+      this.settleAsk(id, new Error("Connessione a JARVIS interrotta."));
+    }
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -295,6 +354,12 @@ class JarvisViewProvider implements vscode.WebviewViewProvider, vscode.Disposabl
         return;
       }
       this.pendingChats.delete(id);
+      const waiter = this.askWaiters.get(id);
+      if (waiter) {
+        this.askWaiters.delete(id);
+        waiter.resolve(message.text);
+        return;
+      }
       this.postToWebview({
         type: "chatReply",
         id,
@@ -368,8 +433,12 @@ class JarvisViewProvider implements vscode.WebviewViewProvider, vscode.Disposabl
   }
 
   private failPendingChats(detail: string): void {
-    for (const id of this.pendingChats.keys()) {
-      this.rejectChat(id, detail);
+    for (const id of [...this.pendingChats.keys()]) {
+      if (this.askWaiters.has(id)) {
+        this.settleAsk(id, new Error(detail));
+      } else {
+        this.rejectChat(id, detail);
+      }
     }
     this.pendingChats.clear();
   }
@@ -379,6 +448,37 @@ class JarvisViewProvider implements vscode.WebviewViewProvider, vscode.Disposabl
   }
 }
 
+function registerLanguageModelTool(provider: JarvisViewProvider): vscode.Disposable[] {
+  // vscode.lm is absent on older hosts; the extension must keep working there.
+  const lm = (vscode as unknown as { lm?: typeof vscode.lm }).lm;
+  if (!lm || typeof lm.registerTool !== "function") {
+    return [];
+  }
+  return [
+    lm.registerTool<{ prompt: string }>("jarvis_ask", {
+      prepareInvocation(options) {
+        return {
+          invocationMessage: "Chiedo a JARVIS…",
+          confirmationMessages: {
+            title: "Inviare la richiesta a JARVIS?",
+            message: new vscode.MarkdownString(
+              `JARVIS può eseguire azioni sul computer. Richiesta:\n\n> ${String(
+                options.input?.prompt ?? "",
+              ).slice(0, 500)}`,
+            ),
+          },
+        };
+      },
+      async invoke(options, token) {
+        const answer = await provider.ask(parseToolPrompt(options.input), token);
+        return new vscode.LanguageModelToolResult([
+          new vscode.LanguageModelTextPart(answer),
+        ]);
+      },
+    }),
+  ];
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new JarvisViewProvider(context);
   context.subscriptions.push(
@@ -386,6 +486,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("jarvis.openPanel", () =>
       vscode.commands.executeCommand("workbench.view.extension.jarvis"),
     ),
+    ...registerLanguageModelTool(provider),
     vscode.commands.registerCommand("jarvis.setConnectionToken", async () => {
       const token = await vscode.window.showInputBox({
         password: true,

@@ -48,6 +48,11 @@ _CTX_KEYS = ("player", "speak", "response", "session_memory")
 _BEHAVIORS = ("BLOCKING", "NON_BLOCKING")
 _SCHEDULING = ("WHEN_IDLE", "SILENT", "INTERRUPT")
 
+# risk_class: "read" (no side effects), "write" (changes state, reversible or
+# low impact), "destructive" (needs explicit user confirmation before running).
+RISK_CLASSES = ("read", "write", "destructive")
+CONFIRM_PARAM = "confirmed"
+
 
 def _opt_upper(value, allowed: tuple[str, ...]) -> Optional[str]:
     v = str(value or "").strip().upper()
@@ -65,6 +70,7 @@ class ActionRecord:
     error: str = ""
     behavior: Optional[str] = None     # None = the API's default (blocking)
     scheduling: Optional[str] = None   # None = the API's default (WHEN_IDLE)
+    risk_class: str = "write"
 
 
 class ActionRegistry:
@@ -77,8 +83,16 @@ class ActionRegistry:
     def get_tool_declarations(self) -> list[dict]:
         out = []
         for rec in self._actions.values():
+            parameters = rec.parameters
+            if rec.risk_class == "destructive":
+                properties = dict(parameters.get("properties", {}))
+                properties[CONFIRM_PARAM] = {
+                    "type": "BOOLEAN",
+                    "description": "Set true only after the user explicitly confirmed this action.",
+                }
+                parameters = {**parameters, "properties": properties}
             decl = {"name": rec.name, "description": rec.description,
-                    "parameters": rec.parameters}
+                    "parameters": parameters}
             if rec.behavior:
                 decl["behavior"] = rec.behavior
             out.append(decl)
@@ -92,6 +106,10 @@ class ActionRegistry:
         rec = self._actions.get(name)
         return rec.scheduling if rec else None
 
+    def risk_class(self, name: str) -> str:
+        rec = self._actions.get(name)
+        return rec.risk_class if rec else "write"
+
     def names(self) -> set[str]:
         return set(self._actions.keys())
 
@@ -100,6 +118,9 @@ class ActionRegistry:
         rec = self._actions.get(name)
         if rec is None or not rec.valid:
             return f"Action '{name}' is not available."
+        if rec.risk_class == "destructive" and parameters.get(CONFIRM_PARAM) is not True:
+            return (f"Action '{name}' is destructive. Ask the user for explicit "
+                    f"confirmation, then call it again with {CONFIRM_PARAM}=true.")
         try:
             return _call_handler(rec.handler, parameters, ctx or {}) or "Done."
         except Exception as e:
@@ -148,8 +169,14 @@ def _validate(module, filename: str) -> ActionRecord:
         return ActionRecord(name=name, file=filename,
                             error="TOOL['handler'] missing or not callable.")
 
+    risk_class = tool.get("risk_class", "write")
+    if risk_class not in RISK_CLASSES:
+        return ActionRecord(name=name, file=filename,
+                            error=f"TOOL['risk_class'] must be one of {RISK_CLASSES}.")
+
     return ActionRecord(name=name, description=description.strip(), parameters=parameters,
                         handler=handler, file=filename, valid=True, error="",
+                        risk_class=risk_class,
                         behavior=_opt_upper(tool.get("behavior"), _BEHAVIORS),
                         scheduling=_opt_upper(tool.get("scheduling"), _SCHEDULING))
 
