@@ -9,6 +9,7 @@ Management CLI for connectors and skills.
     python -m core.registry_cli skill-approve <skill> --reviewer <name>
     python -m core.registry_cli set-tripo-key                 # hidden prompt, for generate_3d_model
     python -m core.registry_cli set-3d-backend auto|local|tripo
+    python -m core.registry_cli download-cad-models           # multi-part CAD models for explode_model
 
 Tokens are read with a hidden prompt, never from argv, and stored via SecretStore.
 """
@@ -43,6 +44,7 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
     sub.add_parser("set-tripo-key")
     backend_cmd = sub.add_parser("set-3d-backend")
     backend_cmd.add_argument("backend", choices=("auto", "local", "tripo"))
+    sub.add_parser("download-cad-models")
     approve = sub.add_parser("skill-approve")
     approve.add_argument("skill")
     approve.add_argument("--reviewer", required=True)
@@ -78,6 +80,13 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
                 return "error: empty key, nothing stored"
             runtime.secrets.set(SECRET_NAME, key)
             return f"{SECRET_NAME}: stored in the SecretStore"
+        if args.command == "download-cad-models":
+            from core import cad_models
+            results = cad_models.download_cad_models()
+            lines = [f"{name}: {outcome}" for name, outcome in results.items()]
+            if any(o.startswith("FAILED") for o in results.values()):
+                return "error: some models failed\n" + "\n".join(lines)
+            return "\n".join(lines) + "\nSaved in assets/viewer3d/models/cad/ (see NOTICE.txt there)."
         if args.command == "skill-diff":
             return json.dumps(runtime.skills.diff(args.skill), indent=2)
         runtime.skills.approve(args.skill, args.reviewer)

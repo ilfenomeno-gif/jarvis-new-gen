@@ -4,6 +4,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 const state = {
   markers: [], target: null, spin: true, ready: false, flights: null,
   model: null, modelStatus: "none", modelError: "", shaderError: "", partInfo: {},
+  style: "hologram",
 };
 const canvas = document.getElementById("c");
 // Senza WebGL (GPU in blocklist) il viewer resta controllabile ma non disegna.
@@ -118,6 +119,12 @@ function collectParts(root, size) {
     level = next;
   }
   if (level.length < 2) return [];
+  // A split into just two chunks is a poor explosion: open up to three more levels.
+  for (let k = 0; k < 3 && level.length < 3; k++) {
+    const deeper = level.flatMap(o => (o.children.length ? o.children : [o]));
+    if (deeper.length === level.length) break;
+    level = deeper;
+  }
   const all = new THREE.Box3().setFromObject(root).getCenter(new THREE.Vector3());
   return level.map((node, i) => {
     const c = new THREE.Box3().setFromObject(node).getCenter(new THREE.Vector3());
@@ -230,7 +237,13 @@ const pointer = new THREE.Vector2();
 const hover = { x: 0, y: 0, pending: false, last: 0, rays: 0, name: "", text: "" };
 const RAY_INTERVAL_MS = 50;
 
+// The Python side listens to the page console for this prefix (see ui.py).
+function emitHover(name, text) {
+  console.info("JARVIS_HOVER " + JSON.stringify({ name, text }));
+}
+
 function hideTip() {
+  if (hover.name) emitHover("", "");
   hover.name = ""; hover.text = "";
   if (tip) tip.style.display = "none";
 }
@@ -244,6 +257,7 @@ function placeTip() {
 
 function showTip(name, text) {
   hover.name = name; hover.text = text;
+  emitHover(name, text);
   if (!tip) return;
   tip.textContent = "";
   const title = document.createElement("b");
@@ -268,7 +282,15 @@ function partAt(obj, root) {
       return { name: o.name, text: state.partInfo[o.name] };
     }
   }
-  return { name: first, text: "" };
+  if (first) return { name: first, text: "" };
+  // Unnamed nodes (e.g. Khronos engine models): label by top-level part.
+  const m = state.model;
+  const idx = m ? m.parts.findIndex(p => { for (let o = obj; o; o = o.parent) if (o === p.node) return true; return false; }) : -1;
+  if (idx >= 0) {
+    const key = "Parte " + (idx + 1);
+    return { name: key, text: Object.prototype.hasOwnProperty.call(state.partInfo, key) ? state.partInfo[key] : "" };
+  }
+  return { name: "", text: "" };
 }
 
 function pickPart(now) {
@@ -367,7 +389,7 @@ window.jarvisViewer = {
     this.removeModel();
     state.modelStatus = "loading";
     new GLTFLoader().load(
-      "models/" + encodeURIComponent(name),
+      "models/" + name.split("/").map(encodeURIComponent).join("/"),
       (gltf) => {
         const root = gltf.scene;
         const box = new THREE.Box3().setFromObject(root);
@@ -380,7 +402,7 @@ window.jarvisViewer = {
         scene.add(group);
         group.updateMatrixWorld(true);
         state.model = { group, root, name, meshes: meshesOf(root), parts: collectParts(root, Math.max(size.x, size.y, size.z) || 1), explode: 0, explodeTo: 0, highlight: "", holo: [], hologram: false, style: "hologram" };
-        applyStyle(state.model, "hologram");
+                applyStyle(state.model, state.style);
         state.modelStatus = "ready";
         globe.visible = false;
         rings.forEach(r => { r.visible = false; });
@@ -406,6 +428,7 @@ window.jarvisViewer = {
   setMaterialStyle(style) {
     style = String(style);
     if (!STYLES.includes(style)) throw new Error("style must be one of " + STYLES.join(", "));
+    state.style = style;
     const m = state.model;
     if (!m) return;
     const keep = m.highlight;
@@ -463,6 +486,7 @@ window.jarvisViewer = {
         edges: state.model ? state.model.meshes.filter(o => o.userData.edgeLines).length : 0,
         meshColors: state.model ? state.model.meshes.map(o => [].concat(o.material)[0].color ? [].concat(o.material)[0].color.getHexString() : "") : [],
         partInfo: Object.keys(state.partInfo).length,
+        pendingStyle: state.style,
         hover: { name: hover.name, text: hover.text, rays: hover.rays, visible: !!tip && tip.style.display === "block" },
         shaderError: state.shaderError,
       },

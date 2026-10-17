@@ -6,7 +6,7 @@ _MODES = (
     "show", "hide", "fly_to", "add_marker", "clear_markers", "spin",
     "load_live_flights", "clear_flights", "load_model", "clear_model",
     "explode_model", "highlight_part", "set_hologram",
-    "set_material_style", "set_part_info", "list_parts",
+    "set_material_style", "set_part_info", "list_parts", "list_models", "hovered_part",
 )
 
 
@@ -32,7 +32,24 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
         if mode == "set_material_style":
             style = str(params.get("style") or "").strip().lower()
             player.viewer3d_call("setMaterialStyle", [style])
-            return f"Material style set to {style}."
+            return f"Material style set to {style}. It applies to the loaded 3D model, or to the next one loaded (the globe has no material styles)."
+        if mode == "list_models":
+            from core.viewer3d import list_models
+            found = list_models()
+            if not (found["generated"] or found["cad"]):
+                return "No models available. CAD models: run 'python -m core.registry_cli download-cad-models'."
+            return (
+                "CAD (multi-part, use these to explain/disassemble): " + (", ".join(found["cad"]) or "none downloaded yet")
+                + ". Generated (single-part): " + (", ".join(found["generated"]) or "none") + "."
+            )
+        if mode == "hovered_part":
+            if not hasattr(player, "viewer3d_hover"):
+                return "Hover information is not available."
+            hover = player.viewer3d_hover()
+            if not hover.get("name"):
+                return "The mouse is not over any part of the 3D model right now."
+            text = f" - {hover['text']}" if hover.get("text") else " (no description set for this part)"
+            return f"The user is looking at: {hover['name']}{text}"
         if mode == "set_part_info":
             info = _part_info(params.get("part_info"))
             player.viewer3d_call("setPartInfo", [info])
@@ -40,7 +57,7 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
         if mode == "list_parts":
             from core.viewer3d import model_file, part_names
             names = part_names(model_file(params.get("model")))
-            return "Parts: " + ", ".join(names) if names else "This model has no named parts."
+            return "Parts: " + ", ".join(names) if names else "Parts have no names: the viewer labels them 'Parte 1', 'Parte 2', ... by position."
         if mode == "set_hologram":
             on = params.get("on", True)
             player.viewer3d_call("setHologram", [bool(on)])
@@ -55,7 +72,7 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
             return f"Part '{part}' highlighted." if part else "Highlight removed."
         if mode == "load_model":
             from core.viewer3d import model_file
-            name = model_file(params.get("model")).name
+            name = model_file(params.get("model")) and str(params.get("model")).strip()
             player.viewer3d_call("loadModel", [name])
             return f"Model {name} loaded in the hologram."
         if mode == "clear_model":
@@ -113,7 +130,11 @@ TOOL = {
         "list_parts (model=file name) returns the part names; set_part_info "
         "(part_info = JSON text like {\"fan\": \"cools the card\"}) attaches descriptions "
         "to parts: the user then sees a tooltip with the name and description when "
-        "the mouse is over that part."
+        "the mouse is over that part. hovered_part returns the part under the mouse "
+        "right now: use it for 'what is this?' / 'what am I looking at?'. list_models "
+        "lists loadable models: for 'explain an engine' / 'take a PC apart' prefer a "
+        "multi-part cad/<name>.glb over generating one (generated models are single-part "
+        "and cannot be exploded); model may be 'cad/<name>.glb'."
     ),
     "risk_class": "read",
     "parameters": {

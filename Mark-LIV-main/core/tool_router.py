@@ -35,7 +35,7 @@ def _group(name: str, keywords: str, tools: Iterable[str], prefixes: tuple = ())
 
 
 GROUPS: tuple[Group, ...] = (
-    _group("3d", r"3d|ologramm|hologram|modell|\bmodel|globo|globe|sedia|chair|esplod|explod|evidenzia|highlight|genera|generate|\bfly\b",
+    _group("3d", r"3d|ologramm|hologram|modell|\bmodel|globo|globe|sedia|chair|esplod|explod|evidenzia|highlight|genera|generate|blueprint|materiale|material|realistic|realistic|smonta|spiega|motore|engine|cambio|gearbox|guardando|che cos.{1,3}\s+quest|what is this|what am i looking|mouse|\bfly\b",
            {"generate_3d_model", "viewer_3d", "ui_layout"}),
     _group("flights", r"\bvol[oi]\b|flight|aere[oi]|aircraft|\bplane|aeroport|airport|biglietto|opensky",
            {"flight_finder", "viewer_3d", "gev"}, ("gev_mcp_aircraft", "gev_mcp_find_aircraft", "gev_mcp_get_aircraft")),

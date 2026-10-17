@@ -88,6 +88,22 @@ class _GEVWebEnginePage(QWebEnginePage):
         super().javaScriptConsoleMessage(level, message, line_number, source_id)
 
 
+class _ViewerPage(QWebEnginePage):
+    """Viewer page: relays the hovered part (JS console) to Python."""
+
+    def __init__(self, parent, hover_handler):
+        super().__init__(parent)
+        self._hover_handler = hover_handler
+
+    def javaScriptConsoleMessage(self, level, message, line_number, source_id):
+        from core.viewer3d import parse_hover
+        hover = parse_hover(message)
+        if hover is not None:
+            self._hover_handler(hover)
+            return
+        super().javaScriptConsoleMessage(level, message, line_number, source_id)
+
+
 class _SafeBrowserPage(QWebEnginePage):
     def __init__(self, parent, blocked_callback):
         super().__init__(parent)
@@ -3171,6 +3187,7 @@ class MainWindow(QMainWindow):
     def _viewer3d_ensure(self):
         if self._viewer3d is None:
             view = QWebEngineView()
+            view.setPage(_ViewerPage(view, self._viewer3d_set_hover))
             # The page is our own local file; it must read models/*.glb beside it.
             view.settings().setAttribute(
                 QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True
@@ -3186,6 +3203,11 @@ class MainWindow(QMainWindow):
             self._hud_cam_stack.addWidget(view)
             self._viewer3d = view
         return self._viewer3d
+
+    _viewer3d_hover_state: dict = {"name": "", "text": ""}
+
+    def _viewer3d_set_hover(self, hover: dict) -> None:
+        self._viewer3d_hover_state = hover
 
     def _viewer3d_on_loaded(self, ok: bool) -> None:
         self._viewer3d_loaded = bool(ok)
@@ -5752,6 +5774,10 @@ class JarvisUI:
         from core.viewer3d import build_call
         function, args_json = build_call(function, args)
         self._win._viewer_call_sig.emit(function, json.dumps(json.loads(args_json)))
+
+    def viewer3d_hover(self) -> dict:
+        """Part currently under the mouse in the 3D viewer ({'name','text'}, empty if none)."""
+        return dict(self._win._viewer3d_hover_state)
 
     def panel_status(self) -> dict:
         win = self._win

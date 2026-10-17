@@ -40,6 +40,13 @@ def test_keywords_pick_matching_tools_in_italian_and_english():
     assert "gev_mcp_get_earthquakes" in out and "weather_report" not in out
 
 
+def test_viewer_voice_commands_select_the_3d_tools():
+    router = ToolRouter()
+    for phrase in ("metti il globo in blueprint", "passa al materiale realistico", "spiega un motore",
+                   "smonta il cambio", "cosa sto guardando?", "che cos'è questa?"):
+        assert {"viewer_3d"} <= names(router.select(phrase, SAMPLE)), phrase
+
+
 def test_flights_pulls_in_aircraft_tools_but_not_other_gev_tools():
     out = names(ToolRouter().select("traccia i voli sopra l'Europa", SAMPLE))
     assert {"flight_finder", "viewer_3d", "gev", "gev_mcp_aircraft_in_area"} <= out

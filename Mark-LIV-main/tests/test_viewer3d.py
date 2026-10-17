@@ -418,6 +418,13 @@ def test_real_page_blueprint_style_and_hover_tooltip():
         state = _poll_state(app, win, lambda s: s["model"]["hover"]["name"] == "part_a")
         hover = state["model"]["hover"]
         assert hover == {**hover, "name": "part_a", "text": "Scheda video: calcoli grafici", "visible": True}, hover
+        # the same hover reaches the Python side (tool hovered_part)
+        deadline = time.time() + 5
+        while time.time() < deadline and jarvis.viewer3d_hover().get("name") != "part_a":
+            app.processEvents()
+        assert jarvis.viewer3d_hover() == {"name": "part_a", "text": "Scheda video: calcoli grafici"}
+        said = viewer_3d.viewer_3d({"mode": "hovered_part"}, player=jarvis)
+        assert "part_a" in said and "Scheda video" in said, said
 
         # part_b has no description: tooltip shows just the name
         run_js(win, app, move % ("0.44", "-0.09", 1))

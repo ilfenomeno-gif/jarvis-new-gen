@@ -28,23 +28,36 @@ MAX_PART_INFO = 200
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "viewer3d" / "models"
 MAX_MODEL_BYTES = 40 * 1024 * 1024
-_MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-. ]{0,100}\.(glb|gltf)$")
+_MODEL_NAME = re.compile(r"^(cad/)?[A-Za-z0-9][A-Za-z0-9_\-. ]{0,100}\.(glb|gltf)$")
 
 
 def model_file(name, base: Path | None = None) -> Path:
-    """Resolve a model name to a file inside the models folder, or raise ValueError."""
+    """Resolve a model name (plain, or 'cad/<name>') to a file in the models folder, or raise ValueError."""
     base = (base or MODELS_DIR).resolve()
     name = str(name or "").strip()
     if not _MODEL_NAME.match(name) or ".." in name:
-        raise ValueError("model must be a plain .glb/.gltf file name")
+        raise ValueError("model must be a .glb/.gltf file name (optionally cad/<name>)")
     path = (base / name).resolve()
-    if path.parent != base:
+    if path.parent not in (base, base / "cad"):
         raise ValueError("model must be inside the models folder")
     if not path.is_file():
         raise ValueError(f"model '{name}' not found in the models folder")
     if path.stat().st_size > MAX_MODEL_BYTES:
         raise ValueError("model file is too large")
     return path
+
+
+def list_models(base: Path | None = None) -> dict[str, list[str]]:
+    """Model names available to loadModel: generated ones and pre-downloaded CAD ones."""
+    base = (base or MODELS_DIR).resolve()
+    out = {"generated": [], "cad": []}
+    for key, folder, prefix in (("generated", base, ""), ("cad", base / "cad", "cad/")):
+        if folder.is_dir():
+            out[key] = sorted(
+                prefix + p.name for p in folder.iterdir()
+                if p.is_file() and _MODEL_NAME.match(prefix + p.name)
+            )
+    return out
 
 
 def part_names(path: Path, limit: int = 60) -> list[str]:
@@ -65,6 +78,24 @@ def part_names(path: Path, limit: int = 60) -> list[str]:
     return names[:limit]
 
 MAX_FLIGHTS = 400
+HOVER_PREFIX = "JARVIS_HOVER "
+
+
+def parse_hover(message) -> dict | None:
+    """Parse a viewer console line 'JARVIS_HOVER {json}'; None if it is not one or is malformed."""
+    if not isinstance(message, str) or not message.startswith(HOVER_PREFIX):
+        return None
+    try:
+        data = json.loads(message[len(HOVER_PREFIX):1000])
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    name, text = data.get("name", ""), data.get("text", "")
+    if not isinstance(name, str) or not isinstance(text, str):
+        return None
+    return {"name": name.strip()[:60], "text": text.strip()[:300]}
+
 REGIONS = {
     "europe": (35.0, 72.0, -12.0, 40.0),
     "usa": (24.0, 50.0, -125.0, -66.0),
