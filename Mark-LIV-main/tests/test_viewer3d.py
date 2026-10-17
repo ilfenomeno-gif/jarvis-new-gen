@@ -450,3 +450,69 @@ def test_real_page_blueprint_style_and_hover_tooltip():
         assert state["model"]["partInfo"] == 0 and state["model"]["hover"]["visible"] is False
     finally:
         path.unlink(missing_ok=True)
+
+
+# Each spoken request, the tool call the ologramma skill tells the LLM to make, and the JS call.
+VOICE_CASES = [
+    ("metti in blueprint", {"mode": "set_material_style", "style": "blueprint"}, ("setMaterialStyle", ["blueprint"])),
+    ("smontalo", {"mode": "explode_model", "on": True}, ("explodeModel", [True])),
+    ("mostra texture", {"mode": "set_material_style", "style": "realistic"}, ("setMaterialStyle", ["realistic"])),
+    ("torna all'ologramma", {"mode": "set_material_style", "style": "hologram"}, ("setMaterialStyle", ["hologram"])),
+    ("spiega un PC", {"mode": "load_model", "model": "cad/pc.glb"}, ("loadModel", ["cad/pc.glb"])),
+]
+
+
+@pytest.mark.parametrize("phrase,call,expected", VOICE_CASES, ids=[c[0] for c in VOICE_CASES])
+def test_simulated_llm_voice_commands_reach_the_viewer(phrase, call, expected):
+    from pathlib import Path
+    from core.tool_router import ToolRouter
+    # 1. the router sends the viewer_3d schema to the LLM for this phrase
+    declared = [{"name": "viewer_3d"}, {"name": "weather_report"}, {"name": "reminder"}]
+    assert "viewer_3d" in {d["name"] for d in ToolRouter().select(phrase, declared)}
+    # 2. the skill names the exact mode the LLM must use for the request
+    skill = (Path(__file__).resolve().parents[1] / "skills" / "ologramma" / "SKILL.md").read_text(encoding="utf-8")
+    assert f"mode={call['mode']}" in skill or f"`{call['mode']}`" in skill
+    if "style" in call:
+        assert f"style={call['style']}" in skill
+    if "model" in call:
+        assert call["model"] in skill
+    # 3. the LLM's function call, executed by the real tool, yields the expected viewer call
+    if call["mode"] == "load_model":
+        from core.make_pc_cad import make_pc_cad
+        make_pc_cad()
+    ui = _Ui()
+    out = viewer_3d.viewer_3d(dict(call), player=ui)
+    assert "Invalid" not in out and "Unknown" not in out, out
+    assert ui.calls == [expected]
+
+
+def test_pc_cad_model_has_named_parts(tmp_path):
+    pytest.importorskip("trimesh")
+    from core.make_pc_cad import make_pc_cad
+    from core.viewer3d import part_names
+    path = make_pc_cad(tmp_path)
+    assert path.name == "pc.glb" and path.read_bytes()[:4] == b"glTF"
+    assert {"case", "motherboard", "cpu", "ram_1", "ram_2", "gpu", "psu"} <= set(part_names(path))
+
+
+@needs_local_gpu_stack
+def test_real_page_pc_cad_explodes():
+    pytest.importorskip("trimesh")
+    from core.make_pc_cad import make_pc_cad
+    make_pc_cad()
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    jarvis = ui_module.JarvisUI("")
+    win = jarvis._win
+    viewer_3d.viewer_3d({"mode": "load_model", "model": "cad/pc.glb"}, player=jarvis)
+    state = _poll_state(app, win, lambda s: s["model"]["status"] in ("ready", "error"))
+    assert state["model"]["status"] == "ready", state["model"]
+    assert state["model"]["parts"] >= 7, state["model"]
+    viewer_3d.viewer_3d({"mode": "spin", "spin": False}, player=jarvis)
+    viewer_3d.viewer_3d({"mode": "explode_model", "on": True}, player=jarvis)
+    state = _poll_state(app, win, lambda s: s["model"]["explode"] == 1)
+    assert sum(1 for d in state["model"]["moved"] if d > 0.1) >= 5, state["model"]["moved"]
+    viewer_3d.viewer_3d({"mode": "clear_model"}, player=jarvis)

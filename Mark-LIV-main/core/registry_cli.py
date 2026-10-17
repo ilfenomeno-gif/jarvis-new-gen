@@ -84,6 +84,11 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
             from core import cad_models
             results = cad_models.download_cad_models()
             lines = [f"{name}: {outcome}" for name, outcome in results.items()]
+            try:
+                from core import make_pc_cad
+                lines.append(f"pc.glb: generated ({make_pc_cad.make_pc_cad().stat().st_size} bytes)")
+            except RuntimeError as exc:
+                lines.append(f"pc.glb: skipped ({exc})")
             if any(o.startswith("FAILED") for o in results.values()):
                 return "error: some models failed\n" + "\n".join(lines)
             return "\n".join(lines) + "\nSaved in assets/viewer3d/models/cad/ (see NOTICE.txt there)."
