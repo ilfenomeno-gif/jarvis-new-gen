@@ -150,7 +150,8 @@ def test_tool_routes_to_local(monkeypatch, tmp_path):
     monkeypatch.setattr(model_gen, "tripo_available", lambda: False)
     monkeypatch.setattr(gen, "generate_local", lambda prompt: tmp_path / "chair.glb")
     out = tool.generate_3d_model({"prompt": "a simple chair"}, player=P())
-    assert "hologram" in out and calls == [("loadModel", ["chair.glb"])]
+    assert "blueprint" in out
+    assert calls == [("setMaterialStyle", ["blueprint"]), ("loadModel", ["chair.glb"])]
 
     def boom(prompt):
         raise RuntimeError(gen.OOM_MESSAGE)

@@ -7,6 +7,7 @@ _MODES = (
     "load_live_flights", "clear_flights", "load_model", "clear_model",
     "explode_model", "highlight_part", "set_hologram",
     "set_material_style", "set_part_info", "list_parts", "list_models", "hovered_part",
+    "set_controls",
 )
 
 
@@ -33,6 +34,10 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
             style = str(params.get("style") or "").strip().lower()
             player.viewer3d_call("setMaterialStyle", [style])
             return f"Material style set to {style}. It applies to the loaded 3D model, or to the next one loaded (the globe has no material styles)."
+        if mode == "set_controls":
+            on = bool(params.get("on", True))
+            player.viewer3d_call("setControls", [on])
+            return "Mouse controls on (drag rotates, wheel zooms, right button pans)." if on else "Mouse controls off."
         if mode == "list_models":
             from core.viewer3d import list_models
             found = list_models()
@@ -134,7 +139,9 @@ TOOL = {
         "right now: use it for 'what is this?' / 'what am I looking at?'. list_models "
         "lists loadable models: for 'explain an engine' / 'take a PC apart' prefer a "
         "multi-part cad/<name>.glb over generating one (generated models are single-part "
-        "and cannot be exploded); model may be 'cad/<name>.glb'."
+        "and cannot be exploded); model may be 'cad/<name>.glb'. set_controls (on=true/false) "
+        "enables or disables the mouse controls on a loaded model (drag to rotate, wheel to "
+        "zoom, right button to pan); they are on by default."
     ),
     "risk_class": "read",
     "parameters": {

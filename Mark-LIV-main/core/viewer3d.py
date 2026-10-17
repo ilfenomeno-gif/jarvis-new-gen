@@ -22,6 +22,7 @@ ALLOWED = {
     "setHologram": 1,
     "setMaterialStyle": 1,
     "setPartInfo": 1,
+    "setControls": 1,
 }
 STYLES = ("hologram", "blueprint", "realistic")
 MAX_PART_INFO = 200
@@ -176,7 +177,7 @@ def build_call(function: str, args: list) -> tuple[str, str]:
         if not isinstance(args[0], str) or not _MODEL_NAME.match(args[0]):
             raise ValueError("model must be a plain .glb/.gltf file name")
         clean = [args[0]]
-    elif function in ("explodeModel", "setHologram"):
+    elif function in ("explodeModel", "setHologram", "setControls"):
         if not isinstance(args[0], bool):
             raise ValueError(f"{function} takes true or false")
         clean = [args[0]]

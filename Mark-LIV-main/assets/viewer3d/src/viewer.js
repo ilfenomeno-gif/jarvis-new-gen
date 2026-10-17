@@ -1,10 +1,11 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 const state = {
   markers: [], target: null, spin: true, ready: false, flights: null,
   model: null, modelStatus: "none", modelError: "", shaderError: "", partInfo: {},
-  style: "hologram",
+  style: "hologram", controlsOn: true,
 };
 const canvas = document.getElementById("c");
 // Senza WebGL (GPU in blocklist) il viewer resta controllabile ma non disegna.
@@ -19,6 +20,22 @@ try {
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
 camera.position.set(0, 0, 4.2);
+
+// Drag = rotate, wheel = zoom, right button = pan. Only active while a model is shown
+// (the globe is driven by flyTo/spin) and while setControls(true) is in effect.
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.12;
+controls.minDistance = 1.2;
+controls.maxDistance = 12;
+controls.enabled = false;
+controls.addEventListener("start", () => { state.spin = false; });
+function syncControls() { controls.enabled = state.controlsOn && !!state.model; }
+function resetCamera() {
+  camera.position.set(0, 0, 4.2);
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
 
 const globe = new THREE.Group();
 scene.add(globe);
@@ -99,6 +116,7 @@ function frame(now) {
     m.parts.forEach(p => p.node.position.copy(p.origin).addScaledVector(p.dir, p.dist * m.explode));
   }
   pickPart(now);
+  if (controls.enabled) controls.update();
   if (renderer) renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -404,6 +422,7 @@ window.jarvisViewer = {
         state.model = { group, root, name, meshes: meshesOf(root), parts: collectParts(root, Math.max(size.x, size.y, size.z) || 1), explode: 0, explodeTo: 0, highlight: "", holo: [], hologram: false, style: "hologram" };
                 applyStyle(state.model, state.style);
         state.modelStatus = "ready";
+        syncControls();
         globe.visible = false;
         rings.forEach(r => { r.visible = false; });
       },
@@ -460,16 +479,22 @@ window.jarvisViewer = {
     state.model = null;
     state.modelStatus = "none";
     state.modelError = "";
-    hover.pending = false;
+    syncControls();
+    resetCamera();
     hideTip();
     globe.visible = true;
     rings.forEach(r => { r.visible = true; });
   },
   spin(on) { state.spin = !!on; if (on) state.target = null; },
+  setControls(active) {
+    state.controlsOn = !!active;
+    syncControls();
+  },
   getState() {
     return {
       ready: state.ready,
       webgl: !!renderer,
+      controls: { enabled: controls.enabled, wanted: state.controlsOn, distance: Number(camera.position.distanceTo(controls.target).toFixed(3)), azimuth: Number(controls.getAzimuthalAngle().toFixed(3)) },
       flights: state.flights ? state.flights.list.length : 0,
       model: {
         status: state.modelStatus,

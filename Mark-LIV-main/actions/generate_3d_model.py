@@ -43,7 +43,14 @@ def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
         engine_name = "local" if use_local else "Tripo"
         return f"3D generation failed ({engine_name} engine): {exc}"
     if player is not None and hasattr(player, "viewer3d_call") and params.get("show", True) is not False:
+        if use_local:
+            # TripoSR textures are blurry: show generated models as a clean solid blueprint.
+            # The user can ask for "texture originali" (realistic) afterwards.
+            player.viewer3d_call("setMaterialStyle", ["blueprint"])
         player.viewer3d_call("loadModel", [path.name])
+        if use_local:
+            return (f"Model '{path.name}' generated and shown in blueprint style (clean solid look; "
+                    "say 'texture originali' for the realistic material). Drag with the mouse to rotate.")
         return f"Model '{path.name}' generated and shown as a hologram."
     return f"Model '{path.name}' generated and saved."
 

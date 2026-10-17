@@ -104,7 +104,29 @@ def test_real_page_cad_engine_explodes_and_hover_reaches_python():
     assert state["model"]["status"] == "ready", state["model"]
     assert state["model"]["style"] == "blueprint"
     assert state["model"]["parts"] >= 2
+    assert state["controls"]["enabled"] is True
 
+    # a real mouse drag on the view rotates the camera around the model
+    from PyQt6.QtCore import QPoint, Qt
+    from PyQt6.QtTest import QTest
+    win.resize(900, 700)
+    win.show()
+    app.processEvents()
+    view = win._viewer3d
+    target = view.focusProxy() or view
+    before = state["controls"]["azimuth"]
+    start = QPoint(target.width() // 2, target.height() // 2)
+    QTest.mousePress(target, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+    for step in range(1, 21):
+        QTest.mouseMove(target, start + QPoint(step * 8, 0))
+        app.processEvents()
+    QTest.mouseRelease(target, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start + QPoint(160, 0))
+    state = _poll_state(app, win, lambda s: abs(s["controls"]["azimuth"] - before) > 0.1)
+    assert abs(state["controls"]["azimuth"] - before) > 0.1, state["controls"]
+    viewer_3d.viewer_3d({"mode": "set_controls", "on": False}, player=jarvis)
+    state = _poll_state(app, win, lambda s: s["controls"]["enabled"] is False)
+    assert state["controls"]["enabled"] is False
+    viewer_3d.viewer_3d({"mode": "set_controls", "on": True}, player=jarvis)
     viewer_3d.viewer_3d({"mode": "spin", "spin": False}, player=jarvis)
     viewer_3d.viewer_3d({"mode": "explode_model", "on": True}, player=jarvis)
     state = _poll_state(app, win, lambda s: s["model"]["explode"] == 1)

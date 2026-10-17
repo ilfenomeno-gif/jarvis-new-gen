@@ -32,6 +32,22 @@ def test_prompt_has_3d_friendly_suffix():
     assert report == {"original": "una sedia", "english": "a chair", "translated": True}
 
 
+def test_prompt_forces_clean_geometry_and_boxy_wardrobe():
+    prompt, _ = build_image_prompt("un armadio")
+    assert prompt.startswith("a closed wooden wardrobe, simple box shape")
+    for part in ("clean geometry", "single object", "no overlapping parts", "sharp edges", "solid structure"):
+        assert part in prompt
+    assert "simple box shape" in build_image_prompt("un armadio di legno")[0]
+    assert "box shape" not in build_image_prompt("una sedia")[0]
+
+
+def test_viewer_set_controls_is_validated():
+    from core.viewer3d import build_call
+    assert build_call("setControls", [False])[1] == "[false]"
+    with pytest.raises(ValueError):
+        build_call("setControls", ["yes"])
+
+
 def _mask(boxes, size=100):
     alpha = np.zeros((size, size), dtype=np.uint8)
     for x0, y0, x1, y1 in boxes:

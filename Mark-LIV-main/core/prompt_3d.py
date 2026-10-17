@@ -10,7 +10,18 @@ from __future__ import annotations
 import re
 
 IMAGE_SUFFIX = "isolated on a solid white background, studio lighting, high quality, 3D asset"
+CLEAN_SUFFIX = "clean geometry, single object, no overlapping parts, sharp edges, solid structure"
 VIEW_HINT = "three-quarter view"
+
+# Hollow or boxy furniture comes out as warped blobs unless the shape is spelled out.
+BOXY_HINTS = {
+    "wardrobe": "a closed wooden wardrobe, simple box shape",
+    "cabinet": "a closed wooden cabinet, simple box shape",
+    "fridge": "a closed refrigerator, simple box shape",
+    "bookcase": "a wooden bookcase, simple box shape",
+    "crate": "a closed wooden crate, simple box shape",
+    "box": "a closed box, simple box shape",
+}
 
 ARTICLES = {"un", "uno", "una", "il", "lo", "la", "l", "i", "gli", "le", "un'"}
 FUNCTION_WORDS = {"di": "of", "del": "of the", "della": "of the", "dei": "of the", "con": "with",
@@ -124,10 +135,20 @@ def build_image_prompt(text: str) -> tuple[str, dict]:
     english, translated = to_english(text)
     body = english.rstrip(" ,.")
     low = body.lower()
+    for noun, hint in BOXY_HINTS.items():
+        if re.search(rf"\b{noun}\b", low):
+            if low in (noun, "a " + noun, "an " + noun, "the " + noun):
+                body = hint
+            elif "box shape" not in low:
+                body += ", simple box shape"
+            low = body.lower()
+            break
     parts = [body]
     if "view" not in low:
         parts.append(VIEW_HINT)
     if "white background" not in low:
         parts.append(IMAGE_SUFFIX)
+    if "clean geometry" not in low:
+        parts.append(CLEAN_SUFFIX)
     prompt = ", ".join(parts)
     return prompt, {"original": text, "english": english, "translated": translated}
