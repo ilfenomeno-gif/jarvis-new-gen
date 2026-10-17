@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -28,6 +29,36 @@ KEY_MISSING_MESSAGE = (
     "No Tripo API key configured. Store it with "
     "'python -m core.registry_cli set-tripo-key' (hidden prompt)."
 )
+
+
+BACKENDS = ("auto", "local", "tripo")
+BACKEND_ENV = "JARVIS_3D_BACKEND"
+CONFIG_NAME = "model_gen.json"
+
+
+def _config_path(config_dir: Path | None) -> Path:
+    base = Path(config_dir) if config_dir else Path(__file__).resolve().parent.parent / "config"
+    return base / CONFIG_NAME
+
+
+def backend(config_dir: Path | None = None) -> str:
+    """auto (Tripo when a key exists, else local if installed), local or tripo."""
+    value = os.environ.get(BACKEND_ENV, "").strip().lower()
+    if value not in BACKENDS:
+        try:
+            value = str(json.loads(_config_path(config_dir).read_text(encoding="utf-8")).get("backend", ""))
+        except (OSError, ValueError, AttributeError):
+            value = ""
+    return value if value in BACKENDS else "auto"
+
+
+def set_backend(value: str, config_dir: Path | None = None) -> str:
+    if value not in BACKENDS:
+        raise ValueError(f"backend must be one of {', '.join(BACKENDS)}")
+    path = _config_path(config_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"backend": value}), encoding="utf-8")
+    return value
 
 
 def tripo_available() -> bool:

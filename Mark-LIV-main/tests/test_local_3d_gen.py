@@ -1,0 +1,177 @@
+"""Local 3D generation: orchestration with a fake subprocess runner (no GPU, no models)."""
+import json
+import subprocess
+
+import pytest
+
+from actions import generate_3d_model as tool
+from core import local_3d_gen as gen
+from core import model_gen
+from tests.glb_helper import make_glb
+
+READY = {"torch": True, "cuda": True, "gpu": "RTX 4060", "vram_gb": 8.0, "missing": []}
+
+
+def line(payload):
+    return gen.RESULT_PREFIX + json.dumps(payload)
+
+
+def make_runner(probe=READY, result=None, writer=make_glb, raises=None, stderr=""):
+    calls = []
+
+    def runner(cmd, timeout):
+        calls.append(cmd)
+        if "--probe" in cmd:
+            return 0, "noise\n" + line(probe), ""
+        if raises:
+            raise raises
+        if result is None or result.get("ok"):
+            writer(cmd[cmd.index("--out") + 1])
+        return 0, "log\n" + (line(result) if result is not None else line({"ok": True})), stderr
+    runner.calls = calls
+    return runner
+
+
+def test_readiness_messages():
+    assert gen.readiness_problem(READY) is None
+    assert "not installed" in gen.readiness_problem({"torch": False})
+    assert "missing" in gen.readiness_problem({**READY, "missing": ["rembg"]})
+    assert "No CUDA" in gen.readiness_problem({**READY, "cuda": False})
+    low = gen.readiness_problem({**READY, "vram_gb": 4.0})
+    assert "4.0 GB" in low and "Tripo" in low
+
+
+def test_generate_success(tmp_path):
+    runner = make_runner()
+    path = gen.generate_local("a simple chair", tmp_path, runner)
+    assert path.name == model_gen.model_name("a simple chair") and path.read_bytes()[:4] == b"glTF"
+    assert [p.name for p in tmp_path.iterdir()] == [path.name]
+    assert any("--prompt" in c for c in runner.calls)
+
+
+def test_generate_errors_and_cleanup(tmp_path):
+    with pytest.raises(RuntimeError, match="out of memory"):
+        gen.generate_local("x", tmp_path, make_runner(result={"ok": False, "code": "oom"}))
+    with pytest.raises(RuntimeError, match="failed: ValueError"):
+        gen.generate_local("x", tmp_path, make_runner(result={"ok": False, "code": "error", "message": "ValueError: bad"}))
+    with pytest.raises(RuntimeError, match="timed out"):
+        gen.generate_local("x", tmp_path, make_runner(raises=subprocess.TimeoutExpired("c", 1)))
+    with pytest.raises(RuntimeError, match="not a valid"):
+        gen.generate_local("x", tmp_path, make_runner(writer=lambda p: open(p, "wb").write(b"nope")))
+    with pytest.raises(RuntimeError, match="not installed"):
+        gen.generate_local("x", tmp_path, make_runner(probe={"torch": False}))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_crash_without_result_and_native_oom(tmp_path):
+    def crash(cmd, timeout):
+        if "--probe" in cmd:
+            return 0, line(READY), ""
+        return 3, "", "Traceback...\nRuntimeError: boom"
+    with pytest.raises(RuntimeError, match="crashed .exit 3.*boom"):
+        gen.generate_local("x", tmp_path, crash)
+
+    def native_oom(cmd, timeout):
+        if "--probe" in cmd:
+            return 0, line(READY), ""
+        return 1, "", "CUDA error: out of memory"
+    with pytest.raises(RuntimeError, match="out of memory"):
+        gen.generate_local("x", tmp_path, native_oom)
+
+
+def test_marching_cubes_fallback_matches_torchmcubes_convention():
+    np = pytest.importorskip("numpy")
+    torch = pytest.importorskip("torch")
+    trimesh = pytest.importorskip("trimesh")
+    pytest.importorskip("skimage")
+    import sys
+    from core import local_3d_worker as worker
+    saved = sys.modules.pop("torchmcubes", None)
+    try:
+        worker._install_marching_cubes_fallback()
+        from torchmcubes import marching_cubes
+        n = 33
+        ax = np.linspace(-1, 1, n)
+        i, j, k = np.meshgrid(ax, ax, ax, indexing="ij")
+        sdf = (i / 0.9) ** 2 + (j / 0.6) ** 2 + (k / 0.3) ** 2 - 1
+        verts, faces = marching_cubes(torch.from_numpy(sdf).float(), 0.0)
+        mesh = trimesh.Trimesh(verts.numpy(), faces.numpy())
+        # vertices come out as (axis2, axis1, axis0), like torchmcubes
+        assert [round(float(e)) for e in mesh.extents] == [10, 19, 29]
+        assert mesh.is_watertight and mesh.volume > 0
+    finally:
+        sys.modules.pop("torchmcubes", None)
+        if saved is not None:
+            sys.modules["torchmcubes"] = saved
+
+
+def test_y_up_conversion():
+    trimesh = pytest.importorskip("trimesh")
+    from core import local_3d_worker as worker
+    tall_z = trimesh.creation.box(extents=[1, 2, 5])
+    assert [round(float(e), 3) for e in worker._to_gltf_y_up(tall_z).extents] == [1.0, 5.0, 2.0]
+
+
+def test_worker_probe_reports_missing_pieces(monkeypatch, tmp_path):
+    from core import local_3d_worker as worker
+    monkeypatch.setenv("TRIPOSR_DIR", str(tmp_path / "nowhere"))
+    assert any("TripoSR" in item for item in worker._missing_modules())
+
+
+def test_python_exe_avoids_pythonw(tmp_path, monkeypatch):
+    (tmp_path / "pythonw.exe").write_text("")
+    (tmp_path / "python.exe").write_text("")
+    monkeypatch.delenv("JARVIS_3D_PYTHON", raising=False)
+    monkeypatch.setattr(gen.sys, "executable", str(tmp_path / "pythonw.exe"))
+    assert gen.python_exe().endswith("python.exe")
+
+
+def test_backend_config(tmp_path, monkeypatch):
+    monkeypatch.delenv(model_gen.BACKEND_ENV, raising=False)
+    assert model_gen.backend(tmp_path) == "auto"
+    model_gen.set_backend("local", tmp_path)
+    assert model_gen.backend(tmp_path) == "local"
+    monkeypatch.setenv(model_gen.BACKEND_ENV, "tripo")
+    assert model_gen.backend(tmp_path) == "tripo"
+    monkeypatch.setenv(model_gen.BACKEND_ENV, "bogus")
+    assert model_gen.backend(tmp_path) == "local"
+    with pytest.raises(ValueError):
+        model_gen.set_backend("bogus", tmp_path)
+
+
+def test_tool_routes_to_local(monkeypatch, tmp_path):
+    calls = []
+
+    class P:
+        def viewer3d_call(self, f, a):
+            calls.append((f, a))
+
+    monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "local")
+    monkeypatch.setattr(model_gen, "tripo_available", lambda: False)
+    monkeypatch.setattr(gen, "generate_local", lambda prompt: tmp_path / "chair.glb")
+    out = tool.generate_3d_model({"prompt": "a simple chair"}, player=P())
+    assert "hologram" in out and calls == [("loadModel", ["chair.glb"])]
+
+    def boom(prompt):
+        raise RuntimeError(gen.OOM_MESSAGE)
+    monkeypatch.setattr(gen, "generate_local", boom)
+    assert "out of memory" in tool.generate_3d_model({"prompt": "a chair"}, player=P())
+
+
+def test_tool_auto_prefers_tripo_key_then_local_then_message(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "auto")
+    monkeypatch.setattr(model_gen, "tripo_available", lambda: True)
+    used = []
+    monkeypatch.setattr(model_gen, "generate_model", lambda p, k: used.append("tripo") or tmp_path / "a.glb")
+    monkeypatch.setattr(gen, "generate_local", lambda p: used.append("local") or tmp_path / "b.glb")
+
+    monkeypatch.setattr(model_gen, "tripo_key", lambda *a, **k: "k")
+    tool.generate_3d_model({"prompt": "a car"})
+    monkeypatch.setattr(model_gen, "tripo_key", lambda *a, **k: "")
+    monkeypatch.setattr(gen, "is_installed", lambda: True)
+    tool.generate_3d_model({"prompt": "a car"})
+    assert used == ["tripo", "local"]
+
+    monkeypatch.setattr(gen, "is_installed", lambda: False)
+    msg = tool.generate_3d_model({"prompt": "a car"})
+    assert "set-tripo-key" in msg and "local_3d_gen setup" in msg

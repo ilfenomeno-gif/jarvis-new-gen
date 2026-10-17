@@ -61,6 +61,7 @@ def test_prompt_validation():
 
 
 def test_tool_messages_without_sdk_or_key(monkeypatch):
+    monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "tripo")
     monkeypatch.setattr(model_gen, "tripo_available", lambda: False)
     assert "pip install" in tool.generate_3d_model({"prompt": "a car"})
     monkeypatch.setattr(model_gen, "tripo_available", lambda: True)
@@ -70,6 +71,7 @@ def test_tool_messages_without_sdk_or_key(monkeypatch):
 
 
 def test_tool_generates_and_loads(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "tripo")
     calls = []
     class P:
         def viewer3d_call(self, f, a): calls.append((f, a))

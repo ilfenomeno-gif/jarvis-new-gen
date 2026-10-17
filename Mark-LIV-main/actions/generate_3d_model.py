@@ -1,6 +1,7 @@
-"""Generates a 3D model from text (Tripo3D) and shows it as a hologram in the viewer.
+"""Generates a 3D model from text and shows it as a hologram in the viewer.
 
-Consumes Tripo credits and writes one .glb into assets/viewer3d/models/.
+Backend: local GPU (core/local_3d_gen.py) or Tripo3D (consumes credits), chosen by
+model_gen.backend(). Writes one .glb into assets/viewer3d/models/.
 """
 from core import model_gen
 
@@ -11,13 +12,22 @@ def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
         prompt = model_gen.clean_prompt(params.get("prompt"))
     except ValueError as exc:
         return f"Invalid request: {exc}"
-    if not model_gen.tripo_available():
-        return model_gen.SDK_MISSING_MESSAGE
-    key = model_gen.tripo_key()
-    if not key:
-        return model_gen.KEY_MISSING_MESSAGE
+    from core import local_3d_gen
+    choice = model_gen.backend()
+    key = model_gen.tripo_key() if model_gen.tripo_available() else ""
+    use_local = choice == "local" or (choice == "auto" and not key and local_3d_gen.is_installed())
     try:
-        path = model_gen.generate_model(prompt, key)
+        if use_local:
+            path = local_3d_gen.generate_local(prompt)
+        elif choice == "tripo" or key:
+            if not model_gen.tripo_available():
+                return model_gen.SDK_MISSING_MESSAGE
+            if not key:
+                return model_gen.KEY_MISSING_MESSAGE
+            path = model_gen.generate_model(prompt, key)
+        else:
+            return (model_gen.KEY_MISSING_MESSAGE + " Or install the free local generator: "
+                    + local_3d_gen.SETUP_MESSAGE)
     except RuntimeError as exc:
         return f"3D generation failed: {exc}"
     if player is not None and hasattr(player, "viewer3d_call") and params.get("show", True) is not False:
@@ -29,8 +39,8 @@ def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
 TOOL = {
     "name": "generate_3d_model",
     "description": (
-        "Creates a 3D model from a text description (Tripo3D, takes up to a minute and "
-        "uses API credits) and shows it as a hologram in the central display. Use when "
+        "Creates a 3D model from a text description (free local GPU generator, or Tripo3D "
+        "with API credits; takes up to a few minutes) and shows it as a hologram in the central display. Use when "
         "the user asks to create, build or show something in 3D, e.g. 'make a hologram "
         "of a jet engine'. Afterwards viewer_3d can explode_model, highlight_part or "
         "clear_model."
