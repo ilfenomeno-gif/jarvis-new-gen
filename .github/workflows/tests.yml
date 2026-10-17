@@ -30,6 +30,8 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run JARVIS tests
         run: python -m pytest -q
+      - name: Verify implementation plan
+        run: python -B ../verifica.py --fast
 
   gev:
     runs-on: windows-latest

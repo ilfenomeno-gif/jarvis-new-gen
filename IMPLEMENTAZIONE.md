@@ -81,6 +81,7 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 - JARVIS: `Mark-LIV-main\.venv\Scripts\python.exe -m pytest Mark-LIV-main\tests` (il Python globale manca di `PyQt6.QtWebEngineCore`)
 - Estensione: `cd jarvis-vscode-extension; npm test`
 - Controlli: `git diff --check`, CI GitHub
+- Verifica per fase: `Mark-LIV-main\.venv\Scripts\python.exe verifica.py [--fast] [--phase N]`. Controlla file, test e coerenza con questa checklist (conteggio caselle e percorsi citati). La CI esegue `--fast`.
 
 ## Log verifiche
 
@@ -88,3 +89,4 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 |------|------|-------|
 | 2026-10-17 | Fase 0 | JARVIS 347 passed; estensione 10 passed (locale); CI remota su `5dee2ea`: jarvis, gev, vscode-extension tutti success |
 | 2026-10-17 | Fasi 1-6 | JARVIS 366 passed; estensione 11 passed + `npm ci --dry-run` ok; `py_compile main.py` ok; DPAPI roundtrip reale ok; trasporto HTTP provato contro un server locale di prova |
+| 2026-10-17 | `verifica.py` | 40/40 controlli OK in locale (suite completa inclusa) |
