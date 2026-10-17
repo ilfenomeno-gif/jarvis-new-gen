@@ -2934,7 +2934,16 @@ class MainWindow(QMainWindow):
         sc_full.activated.connect(self._toggle_fullscreen)
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
+        sc_focus = QShortcut(QKeySequence("Ctrl+Shift+F"), self)
+        sc_focus.activated.connect(lambda: self.set_focus_mode(not self._focus_mode))
 
+    _focus_mode = False
+
+    def set_focus_mode(self, active: bool) -> None:
+        """Hide both side columns so only the central HUD stays visible."""
+        self._focus_mode = bool(active)
+        self._left_panel.setVisible(not self._focus_mode)
+        self._right_panel.setVisible(not self._focus_mode)
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
         self._cam_preview.show_frame(img_bytes)
