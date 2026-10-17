@@ -263,21 +263,22 @@ def test_layout_survives_restart(real_ui):
     second = real_ui()
     win2 = second._win
     assert win2.dockWidgetArea(win2._docks["activity_log"]) == Qt.DockWidgetArea.LeftDockWidgetArea
-    assert not win2._docks["input"].isVisible()
+    # A closed input dock is never restored: without it the user cannot type.
+    assert win2._docks["input"].isVisible()
     assert win2._docks["controls"].isFloating() and win2._docks["controls"].isVisible()
-    assert second.panel_status()["panels"]["input"] is False
+    assert second.panel_status()["panels"]["input"] is True
 
 
 def test_closing_while_in_focus_saves_the_pre_focus_layout(real_ui):
     first = real_ui()
-    first._win._docks["input"].close()
+    first._win._docks["controls"].close()
     real_ui.app.processEvents()
     first.set_focus_mode(True)
     real_ui.app.processEvents()
     first._win.close()
     second = real_ui()
-    assert second.panel_status()["panels"]["input"] is False
-    assert second.panel_status()["panels"]["controls"] is True
+    assert second.panel_status()["panels"]["input"] is True
+    assert second.panel_status()["panels"]["controls"] is False
     assert not second._win._focus_mode
 
 

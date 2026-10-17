@@ -3116,6 +3116,10 @@ class MainWindow(QMainWindow):
             self.restoreState(self._default_state, LAYOUT_VERSION)
         workspace = data["workspace"]
         self._panel_state.restore(data["panels"], "custom" if workspace == "focus" else workspace)
+        # Without the input dock the user cannot type, so a saved "closed" state is never restored.
+        if not self._panel_state.visible("input"):
+            self._panel_state.set_visible("input", True)
+            self._docks["input"].setVisible(True)
         self._render_panels()
         self._last_saved_layout = repr(
             sorted(self._layout_snapshot().items(), key=lambda kv: kv[0])
