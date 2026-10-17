@@ -146,8 +146,11 @@ def _pcm_level(samples) -> float:
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    from core.api_keys import gemini_api_key
+    key = gemini_api_key(API_CONFIG_PATH.parent)
+    if not key:
+        raise KeyError("gemini_api_key")
+    return key
 
 
 def _load_system_prompt() -> str:

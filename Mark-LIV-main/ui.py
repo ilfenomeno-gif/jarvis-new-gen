@@ -5373,7 +5373,8 @@ class MainWindow(QMainWindow):
         if not API_FILE.exists(): return False
         try:
             d = json.loads(API_FILE.read_text(encoding="utf-8"))
-            return bool(d.get("gemini_api_key")) and bool(d.get("os_system"))
+            from core.api_keys import gemini_api_key
+            return bool(gemini_api_key(API_FILE.parent)) and bool(d.get("os_system"))
         except Exception:
             return False
 

@@ -199,8 +199,8 @@ def api_key(refresh: bool = False) -> str:
         if _cached_key is not None and not refresh:
             return _cached_key
         try:
-            data = json.loads(_KEY_FILE.read_text(encoding="utf-8"))
-            _cached_key = str(data.get("gemini_api_key") or "")
+            from core.api_keys import gemini_api_key
+            _cached_key = gemini_api_key(_KEY_FILE.parent)
         except Exception:
             _cached_key = ""
         return _cached_key

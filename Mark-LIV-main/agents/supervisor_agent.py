@@ -12,8 +12,8 @@ BASE_DIR = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    from core.api_keys import gemini_api_key
+    return gemini_api_key(API_CONFIG_PATH.parent)
 
 def _get_model(model_name: str = "gemini-flash-latest"):
     from google import genai

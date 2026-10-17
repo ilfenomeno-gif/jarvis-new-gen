@@ -55,7 +55,8 @@ def _get_os() -> str:
 
 
 def _get_api_key() -> str:
-    return _load_config().get("gemini_api_key", "")
+    from core.api_keys import gemini_api_key
+    return gemini_api_key(_CONFIG_PATH.parent)
 
 _SAFE_SCREENSHOT_ROOTS = (
     Path.home(),

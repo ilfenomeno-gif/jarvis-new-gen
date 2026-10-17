@@ -36,6 +36,8 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
     grant.add_argument("connector")
     grant.add_argument("scopes", nargs="+")
     sub.add_parser("skill-diff").add_argument("skill")
+    migrate = sub.add_parser("migrate-api-key")
+    migrate.add_argument("--remove-plain", action="store_true")
     approve = sub.add_parser("skill-approve")
     approve.add_argument("skill")
     approve.add_argument("--reviewer", required=True)
@@ -55,6 +57,11 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
         if args.command == "revoke":
             runtime.connectors.revoke(args.connector)
             return f"{args.connector}: revoked (dependent skills moved to review_required)"
+        if args.command == "migrate-api-key":
+            from core.api_keys import migrate
+            from core.jarvis_runtime import BASE_DIR
+            result = migrate(BASE_DIR / "config", runtime.secrets, args.remove_plain)
+            return result if result.startswith("error:") else f"gemini_api_key: {result}"
         if args.command == "skill-diff":
             return json.dumps(runtime.skills.diff(args.skill), indent=2)
         runtime.skills.approve(args.skill, args.reviewer)
