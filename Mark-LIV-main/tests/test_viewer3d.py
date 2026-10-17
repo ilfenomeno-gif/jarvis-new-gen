@@ -478,6 +478,7 @@ def test_simulated_llm_voice_commands_reach_the_viewer(phrase, call, expected):
         assert call["model"] in skill
     # 3. the LLM's function call, executed by the real tool, yields the expected viewer call
     if call["mode"] == "load_model":
+        pytest.importorskip("trimesh")
         from core.make_pc_cad import make_pc_cad
         make_pc_cad()
     ui = _Ui()
