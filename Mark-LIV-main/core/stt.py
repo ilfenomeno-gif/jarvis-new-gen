@@ -85,7 +85,7 @@ class WhisperSTT:
         self._language = None if (not language or language.strip().lower() == "auto") else language.strip().lower()
         print(f"[STT] Whisper '{model_name}' ready ({device})")
 
-    def transcribe(self, audio: np.ndarray) -> str:
+    def transcribe(self, audio: np.ndarray, vad_filter: bool = True) -> str:
         """Transcribe a float32 mono 16 kHz numpy array. Returns transcript string."""
         try:
             segments, _ = self._model.transcribe(
@@ -94,7 +94,7 @@ class WhisperSTT:
                 beam_size=1,                       # greedy — 2-3x faster
                 best_of=1,
                 condition_on_previous_text=False,  # no hallucinations, faster
-                vad_filter=True,
+                vad_filter=vad_filter,
                 vad_parameters={"min_silence_duration_ms": 300},
             )
             return " ".join(s.text for s in segments).strip()

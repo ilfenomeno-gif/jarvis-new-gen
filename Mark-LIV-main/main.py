@@ -1110,8 +1110,20 @@ class JarvisLive:
                 local_files_only=True,
             )
             transcript = recognizer.transcribe(audio)
+            seconds = audio.size / 16000
+            peak = float(np.abs(audio).max()) if audio.size else 0.0
+            if not transcript and peak >= 0.02:
+                transcript = recognizer.transcribe(audio, vad_filter=False)
             if not transcript:
-                raise ValueError("Whisper returned no text.")
+                hint = (
+                    "microphone level is almost silent: check the input device"
+                    if peak < 0.02
+                    else "no speech recognised"
+                )
+                raise ValueError(
+                    f"Whisper returned no text ({seconds:.1f}s captured, "
+                    f"peak level {peak:.3f}): {hint}."
+                )
         except Exception as exc:
             self.ui._win._dictation_result_sig.emit(False, str(exc))
         else:
