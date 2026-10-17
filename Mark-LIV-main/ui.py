@@ -3011,7 +3011,7 @@ class MainWindow(QMainWindow):
             f"(...JSON.parse({json.dumps(args_json)}))"
         )
         self._viewer3d_ensure()
-        if function in ("flyTo", "addMarker"):
+        if function in ("flyTo", "addMarker", "setFlights"):
             self.show_viewer3d(True)
         if self._viewer3d_loaded:
             self._viewer3d.page().runJavaScript(script)

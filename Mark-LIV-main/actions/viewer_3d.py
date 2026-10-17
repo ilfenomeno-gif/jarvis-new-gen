@@ -1,7 +1,10 @@
 """Drives the 3D globe in the central display. UI only: no data is read or written."""
-from core.viewer3d import build_call
+from core.viewer3d import build_call, fetch_flights
 
-_MODES = ("show", "hide", "fly_to", "add_marker", "clear_markers", "spin")
+_MODES = (
+    "show", "hide", "fly_to", "add_marker", "clear_markers", "spin",
+    "load_live_flights", "clear_flights",
+)
 
 
 def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
@@ -12,6 +15,15 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
     if player is None or not hasattr(player, "viewer3d_call"):
         return "The interface is not available."
     try:
+        if mode == "load_live_flights":
+            region = str(params.get("region") or "europe").strip().lower()
+            # Tool threads may block; the UI thread is only reached via the signal.
+            flights = fetch_flights(region)
+            player.viewer3d_call("setFlights", [flights])
+            return f"{len(flights)} live flights shown on the globe ({region})."
+        if mode == "clear_flights":
+            player.viewer3d_call("clearFlights", [])
+            return "Flights cleared."
         if mode in ("show", "hide"):
             player.viewer3d_show(mode == "show")
             return "3D viewer shown." if mode == "show" else "3D viewer hidden."
@@ -30,7 +42,7 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
         spin = params.get("spin", True)
         player.viewer3d_call("spin", [spin])
         return "Globe spinning." if spin else "Globe still."
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         return f"Invalid request: {exc}"
 
 
@@ -40,7 +52,11 @@ TOOL = {
         "Controls the holographic 3D globe in the central display. mode=show or "
         "hide switches to or from it; fly_to turns the globe to lat/lon; "
         "add_marker puts a labelled marker at lat/lon; clear_markers removes "
-        "them; spin starts or stops the rotation."
+        "them; spin starts or stops the rotation; load_live_flights fetches real-time "
+        "flights (OpenSky) and plots them on the globe, region=europe, usa or world "
+        "(default europe), and shows the globe; clear_flights removes them. Use "
+        "load_live_flights for requests like 'show live flights' or 'track flights "
+        "on the hologram'."
     ),
     "risk_class": "read",
     "parameters": {
@@ -51,6 +67,7 @@ TOOL = {
             "lon": {"type": "NUMBER", "description": "Longitude, -180 to 180."},
             "label": {"type": "STRING", "description": "Marker label."},
             "spin": {"type": "BOOLEAN", "description": "For mode=spin."},
+            "region": {"type": "STRING", "description": "For load_live_flights: europe, usa, world."},
         },
         "required": ["mode"],
     },

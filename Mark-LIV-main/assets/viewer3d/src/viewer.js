@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-const state = { markers: [], target: null, spin: true, ready: false };
+const state = { markers: [], target: null, spin: true, ready: false, flights: null };
 const canvas = document.getElementById("c");
 // Senza WebGL (GPU in blocklist) il viewer resta controllabile ma non disegna.
 let renderer = null;
@@ -106,11 +106,28 @@ window.jarvisViewer = {
     state.markers.forEach(m => globe.remove(m.obj));
     state.markers = [];
   },
+  setFlights(list) {
+    this.clearFlights();
+    const pos = new Float32Array(list.length * 3);
+    list.forEach((f, i) => toVec(f[0], f[1], 1.02).toArray(pos, i * 3));
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+      color: 0xffd400, size: 0.028, sizeAttenuation: true, depthTest: true,
+    }));
+    globe.add(pts);
+    state.flights = { obj: pts, list: list.map(f => ({ lat: f[0], lon: f[1], callsign: f[2] })) };
+  },
+  clearFlights() {
+    if (state.flights) { globe.remove(state.flights.obj); state.flights.obj.geometry.dispose(); }
+    state.flights = null;
+  },
   spin(on) { state.spin = !!on; if (on) state.target = null; },
   getState() {
     return {
       ready: state.ready,
       webgl: !!renderer,
+      flights: state.flights ? state.flights.list.length : 0,
       spin: state.spin,
       flying: !!state.target,
       markers: state.markers.map(m => ({ lat: m.lat, lon: m.lon, label: m.label })),
