@@ -2652,6 +2652,7 @@ class MainWindow(QMainWindow):
     _wake_word_setup_result_sig = pyqtSignal(bool, str)
     _dictation_result_sig = pyqtSignal(bool, str)
     _dictation_busy_sig = pyqtSignal(bool)
+    _focus_mode_sig = pyqtSignal(bool)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -2890,6 +2891,7 @@ class MainWindow(QMainWindow):
         )
         self._browser_open_sig.connect(self._open_url_in_webview)
         self._browser_close_sig.connect(self.close_browser)
+        self._focus_mode_sig.connect(self.set_focus_mode)
         self._browser_key_sig.connect(self._press_key_in_webview)
         self._browser_click_sig.connect(self._click_link_in_webview)
         self._browser_read_page_sig.connect(self._read_page_aloud)
@@ -5433,6 +5435,14 @@ class JarvisUI:
         self._win._gev_message_dispatch = self._dispatch_gev_message
         self._win.show()
         self.root = _RootShim(self._app)
+
+    @property
+    def focus_mode(self) -> bool:
+        return self._win._focus_mode
+
+    def set_focus_mode(self, active: bool) -> None:
+        """Thread-safe: callable from tool threads."""
+        self._win._focus_mode_sig.emit(bool(active))
 
     @property
     def muted(self) -> bool:
