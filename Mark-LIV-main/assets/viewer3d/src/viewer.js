@@ -2,8 +2,14 @@ import * as THREE from "three";
 
 const state = { markers: [], target: null, spin: true, ready: false };
 const canvas = document.getElementById("c");
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-renderer.setClearColor(0x000308, 1);
+// Senza WebGL (GPU in blocklist) il viewer resta controllabile ma non disegna.
+let renderer = null;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setClearColor(0x000308, 1);
+} catch (e) {
+  console.error("WebGL non disponibile: " + e.message);
+}
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
 camera.position.set(0, 0, 4.2);
@@ -44,6 +50,7 @@ function toVec(lat, lon, r) {
 }
 
 function resize() {
+  if (!renderer) return;
   const w = canvas.clientWidth || 1, h = canvas.clientHeight || 1;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
@@ -70,7 +77,7 @@ function frame(now) {
     globe.rotation.y += dt * 0.25;
   }
   rings.forEach((r, i) => { r.rotation.z += dt * (0.2 + i * 0.1); });
-  renderer.render(scene, camera);
+  if (renderer) renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 
@@ -103,6 +110,7 @@ window.jarvisViewer = {
   getState() {
     return {
       ready: state.ready,
+      webgl: !!renderer,
       spin: state.spin,
       flying: !!state.target,
       markers: state.markers.map(m => ({ lat: m.lat, lon: m.lon, label: m.label })),

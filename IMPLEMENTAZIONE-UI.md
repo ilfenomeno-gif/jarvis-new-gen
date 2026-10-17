@@ -29,3 +29,4 @@ Regole: la UI è PyQt6 nativo (`ui.py`); il core resta Python. La UI non legge n
 | 2026-10-17 | Base | focus mode + `ui_layout`: 383 test, CI verde su `764f13b` |
 | 2026-10-17 | U1 | pytest 385 passed; test_real_window_renders_each_workspace su JarvisUI offscreen ok |
 | 2026-10-17 | U2, U3 | pytest 388 passed; test_viewer3d: pagina Three.js reale caricata offscreen, stato JS riletto (ready, flying, marker) |
+| 2026-10-17 | U2 fix | CI 4882b3c: job jarvis rosso (WebGL2 blocklisted su runner, jarvisViewer non esposto). Viewer ora tollerante (getState.webgl); test passato con e senza WebGL (--disable-webgl) |
