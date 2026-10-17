@@ -5391,13 +5391,21 @@ class MainWindow(QMainWindow):
         ov.show()
         self._overlay = ov
 
+    def _warn_plaintext_key(self) -> None:
+        self._log.append_log(
+            "SYS: WARNING - secure storage unavailable: the API key was written "
+            "in PLAIN TEXT to config/api_keys.json. Do not share that file."
+        )
+        QMessageBox.warning(
+            self, "Chiave API non protetta",
+            "L'archiviazione sicura non è disponibile: la chiave API è stata salvata "
+            "IN CHIARO in config/api_keys.json.\n\nNon condividere quel file.",
+        )
+
     def _on_setup_done(self, key: str, os_name: str):
         from core.api_keys import save_gemini_key
         if not save_gemini_key(CONFIG_DIR, key, os_name):
-            self._log.append_log(
-                "SYS: WARNING - secure storage unavailable: the API key was written "
-                "in PLAIN TEXT to config/api_keys.json. Do not share that file."
-            )
+            self._warn_plaintext_key()
         self._ready = True
         if self._overlay:
             self._overlay.hide()
