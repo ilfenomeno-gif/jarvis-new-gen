@@ -320,3 +320,126 @@ def test_real_page_hologram_shader_and_toggle():
         assert state["model"]["shaderError"] == ""
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_material_style_and_part_info_validation():
+    assert build_call("setMaterialStyle", [" Blueprint "]) == ("setMaterialStyle", '["blueprint"]')
+    for bad in ("neon", "", 3, None):
+        with pytest.raises(ValueError):
+            build_call("setMaterialStyle", [bad])
+    func, raw = build_call("setPartInfo", [{" fan ": "x" * 500, "": "skip", "gpu": 7}])
+    import json
+    info = json.loads(raw)[0]
+    assert func == "setPartInfo" and list(info) == ["fan", "gpu"] and len(info["fan"]) == 300 and info["gpu"] == "7"
+    for bad in ("text", ["a"], None):
+        with pytest.raises(ValueError):
+            build_call("setPartInfo", [bad])
+
+
+def test_tool_style_part_info_and_list_parts(tmp_path, monkeypatch):
+    import core.viewer3d as core_viewer
+    from tests.glb_helper import make_glb
+
+    make_glb(tmp_path / "m.glb")
+    monkeypatch.setattr(core_viewer, "MODELS_DIR", tmp_path)
+    ui = _Ui()
+    assert "blueprint" in viewer_3d.viewer_3d({"mode": "set_material_style", "style": "Blueprint"}, player=ui)
+    assert "Invalid" in viewer_3d.viewer_3d({"mode": "set_material_style", "style": "neon"}, player=ui)
+    assert "Invalid" in viewer_3d.viewer_3d({"mode": "set_material_style"}, player=ui)
+    assert "1 part" in viewer_3d.viewer_3d(
+        {"mode": "set_part_info", "part_info": '{"part_a": "Scheda video"}'}, player=ui)
+    assert "Invalid" in viewer_3d.viewer_3d({"mode": "set_part_info", "part_info": "not json"}, player=ui)
+    assert "Invalid" in viewer_3d.viewer_3d({"mode": "set_part_info", "part_info": "{}"}, player=ui)
+    assert viewer_3d.viewer_3d({"mode": "list_parts", "model": "m.glb"}, player=ui) == "Parts: part_a, part_b"
+    assert ui.calls == [("setMaterialStyle", ["blueprint"]), ("setPartInfo", [{"part_a": "Scheda video"}])]
+    assert "style" in viewer_3d.TOOL["parameters"]["properties"]
+
+
+def test_part_names_sanitised_like_three(tmp_path):
+    import json
+    import struct
+    from core.viewer3d import part_names
+
+    doc = json.dumps({"asset": {"version": "2.0"}, "nodes": [{"name": "Fan blade.01"}, {"name": "a[b]"}, {}]}).encode()
+    doc += b" " * (-len(doc) % 4)
+    blob = struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(doc)) + struct.pack("<II", len(doc), 0x4E4F534A) + doc
+    (tmp_path / "n.glb").write_bytes(blob)
+    assert part_names(tmp_path / "n.glb") == ["Fan_blade01", "ab"]
+
+
+@needs_local_gpu_stack
+def test_real_page_blueprint_style_and_hover_tooltip():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+    from core.viewer3d import MODELS_DIR
+    from tests.glb_helper import make_glb
+
+    MODELS_DIR.mkdir(exist_ok=True)
+    path = MODELS_DIR / "pytest_hover.glb"
+    make_glb(path)
+
+    def run_js(win, app, script):
+        win._viewer3d.page().runJavaScript(script)
+        for _ in range(5):
+            app.processEvents()
+
+    # Screen position of a point of part_a (model is 1.6 units wide, camera at z=4.2, fov 45).
+    move = """
+    (() => {
+      const r = document.getElementById('c').getBoundingClientRect();
+      const half = 4.2 * Math.tan(22.5 * Math.PI / 180);
+      const x = r.left + r.width * (0.5 + (%s) / (half * r.width / r.height) / 2);
+      const y = r.top + r.height * (0.5 - (%s) / half / 2);
+      for (let i = 0; i < %d; i++)
+        document.getElementById('c').dispatchEvent(new MouseEvent('mousemove', {clientX: x, clientY: y}));
+    })()
+    """
+    try:
+        app = QApplication.instance() or QApplication(sys.argv)
+        jarvis = ui_module.JarvisUI("")
+        win = jarvis._win
+        viewer_3d.viewer_3d({"mode": "load_model", "model": "pytest_hover.glb"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["status"] == "ready")
+        assert state["model"]["style"] == "hologram" and state["model"]["edges"] == 0
+
+        viewer_3d.viewer_3d({"mode": "set_material_style", "style": "blueprint"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["style"] == "blueprint")
+        assert state["model"]["hologram"] is False and state["model"]["edges"] == 2
+        assert state["model"]["meshColors"] == ["0055ff", "0055ff"], state["model"]
+        if state["webgl"]:
+            time.sleep(0.5)
+            assert _poll_state(app, win, lambda s: True)["model"]["shaderError"] == ""
+
+        viewer_3d.viewer_3d({"mode": "spin", "spin": False}, player=jarvis)
+        viewer_3d.viewer_3d({"mode": "set_part_info", "part_info": {"part_a": "Scheda video: calcoli grafici"}}, player=jarvis)
+        # centroid of part_a's triangle in world units (see make_glb): about (-0.62, -0.09)
+        run_js(win, app, move % ("-0.62", "-0.09", 1))
+        state = _poll_state(app, win, lambda s: s["model"]["hover"]["name"] == "part_a")
+        hover = state["model"]["hover"]
+        assert hover == {**hover, "name": "part_a", "text": "Scheda video: calcoli grafici", "visible": True}, hover
+
+        # part_b has no description: tooltip shows just the name
+        run_js(win, app, move % ("0.44", "-0.09", 1))
+        state = _poll_state(app, win, lambda s: s["model"]["hover"]["name"] == "part_b")
+        assert state["model"]["hover"]["text"] == "" and state["model"]["hover"]["visible"] is True
+
+        # empty space hides the tooltip
+        run_js(win, app, move % ("0", "1.4", 1))
+        state = _poll_state(app, win, lambda s: not s["model"]["hover"]["visible"])
+        assert state["model"]["hover"]["name"] == ""
+
+        # throttle: 300 mousemove events in one task cost at most a handful of raycasts
+        before = state["model"]["hover"]["rays"]
+        run_js(win, app, move % ("-0.62", "-0.09", 300))
+        state = _poll_state(app, win, lambda s: s["model"]["hover"]["visible"])
+        assert state["model"]["hover"]["rays"] - before <= 4, state["model"]["hover"]
+
+        viewer_3d.viewer_3d({"mode": "set_material_style", "style": "realistic"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["style"] == "realistic")
+        assert state["model"]["edges"] == 0 and state["model"]["meshColors"] != ["0055ff", "0055ff"]
+        viewer_3d.viewer_3d({"mode": "clear_model"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["status"] == "none")
+        assert state["model"]["partInfo"] == 0 and state["model"]["hover"]["visible"] is False
+    finally:
+        path.unlink(missing_ok=True)

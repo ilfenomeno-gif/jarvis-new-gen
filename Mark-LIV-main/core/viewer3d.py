@@ -20,7 +20,11 @@ ALLOWED = {
     "explodeModel": 1,
     "highlightPart": 1,
     "setHologram": 1,
+    "setMaterialStyle": 1,
+    "setPartInfo": 1,
 }
+STYLES = ("hologram", "blueprint", "realistic")
+MAX_PART_INFO = 200
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "viewer3d" / "models"
 MAX_MODEL_BYTES = 40 * 1024 * 1024
@@ -41,6 +45,24 @@ def model_file(name, base: Path | None = None) -> Path:
     if path.stat().st_size > MAX_MODEL_BYTES:
         raise ValueError("model file is too large")
     return path
+
+
+def part_names(path: Path, limit: int = 60) -> list[str]:
+    """Node names of a .glb/.gltf as the viewer sees them (three.js sanitises names)."""
+    import struct
+
+    data = path.read_bytes()
+    if data[:4] == b"glTF":
+        length = struct.unpack_from("<I", data, 12)[0]
+        doc = json.loads(data[20:20 + length].decode("utf-8"))
+    else:
+        doc = json.loads(data.decode("utf-8"))
+    names = []
+    for node in doc.get("nodes", []):
+        name = re.sub(r"[\[\].:/]", "", re.sub(r"\s", "_", str(node.get("name") or "")))
+        if name and name not in names:
+            names.append(name)
+    return names[:limit]
 
 MAX_FLIGHTS = 400
 REGIONS = {
@@ -131,6 +153,19 @@ def build_call(function: str, args: list) -> tuple[str, str]:
         if not isinstance(args[0], str):
             raise ValueError("part must be text")
         clean = [args[0].strip()[:60]]
+    elif function == "setMaterialStyle":
+        style = args[0].strip().lower() if isinstance(args[0], str) else ""
+        if style not in STYLES:
+            raise ValueError(f"style must be one of: {', '.join(STYLES)}")
+        clean = [style]
+    elif function == "setPartInfo":
+        if not isinstance(args[0], dict):
+            raise ValueError("part info must be an object of part name -> description")
+        clean = [{
+            str(k).strip()[:60]: str(v).strip()[:300]
+            for k, v in list(args[0].items())[:MAX_PART_INFO]
+            if str(k).strip()
+        }]
     elif function == "spin":
         if not isinstance(args[0], bool):
             raise ValueError("spin takes true or false")

@@ -1,11 +1,24 @@
 """Drives the 3D globe in the central display. UI only: no data is read or written."""
 from core.viewer3d import build_call, fetch_flights
+import json
 
 _MODES = (
     "show", "hide", "fly_to", "add_marker", "clear_markers", "spin",
     "load_live_flights", "clear_flights", "load_model", "clear_model",
     "explode_model", "highlight_part", "set_hologram",
+    "set_material_style", "set_part_info", "list_parts",
 )
+
+
+def _part_info(raw) -> dict:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raise ValueError("part_info must be a JSON object such as {\"fan\": \"cools the card\"}") from None
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError("part_info must be a non-empty object of part name -> description")
+    return raw
 
 
 def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
@@ -16,6 +29,18 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
     if player is None or not hasattr(player, "viewer3d_call"):
         return "The interface is not available."
     try:
+        if mode == "set_material_style":
+            style = str(params.get("style") or "").strip().lower()
+            player.viewer3d_call("setMaterialStyle", [style])
+            return f"Material style set to {style}."
+        if mode == "set_part_info":
+            info = _part_info(params.get("part_info"))
+            player.viewer3d_call("setPartInfo", [info])
+            return f"{len(info)} part description(s) set: hover a part to read it."
+        if mode == "list_parts":
+            from core.viewer3d import model_file, part_names
+            names = part_names(model_file(params.get("model")))
+            return "Parts: " + ", ".join(names) if names else "This model has no named parts."
         if mode == "set_hologram":
             on = params.get("on", True)
             player.viewer3d_call("setHologram", [bool(on)])
@@ -81,7 +106,14 @@ TOOL = {
         "folder (model=file name) in place of the globe; clear_model restores the globe. "
         "explode_model (on=true/false) spreads the loaded model's parts apart and "
         "back; highlight_part makes the named part glow (empty part clears it); "
-        "set_hologram (on=true/false) toggles the projection look (on by default)."
+        "set_hologram (on=true/false) toggles the projection look (on by default). "
+        "set_material_style (style=hologram, blueprint or realistic) changes how the "
+        "loaded model is drawn: blueprint = solid blue with glowing CAD edges, "
+        "realistic = the model's own textures; use it for 'show it in blueprint mode'. "
+        "list_parts (model=file name) returns the part names; set_part_info "
+        "(part_info = JSON text like {\"fan\": \"cools the card\"}) attaches descriptions "
+        "to parts: the user then sees a tooltip with the name and description when "
+        "the mouse is over that part."
     ),
     "risk_class": "read",
     "parameters": {
@@ -96,6 +128,8 @@ TOOL = {
             "model": {"type": "STRING", "description": "For load_model: file name such as sword.glb."},
             "on": {"type": "BOOLEAN", "description": "For explode_model: true explodes, false reassembles."},
             "part": {"type": "STRING", "description": "For highlight_part: node name."},
+            "style": {"type": "STRING", "description": "For set_material_style: hologram, blueprint, realistic."},
+            "part_info": {"type": "STRING", "description": "For set_part_info: JSON object text, part name -> description."},
         },
         "required": ["mode"],
     },

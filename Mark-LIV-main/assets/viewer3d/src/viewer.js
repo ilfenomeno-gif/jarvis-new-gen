@@ -3,7 +3,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const state = {
   markers: [], target: null, spin: true, ready: false, flights: null,
-  model: null, modelStatus: "none", modelError: "", shaderError: "",
+  model: null, modelStatus: "none", modelError: "", shaderError: "", partInfo: {},
 };
 const canvas = document.getElementById("c");
 // Senza WebGL (GPU in blocklist) il viewer resta controllabile ma non disegna.
@@ -22,6 +22,12 @@ camera.position.set(0, 0, 4.2);
 const globe = new THREE.Group();
 scene.add(globe);
 const cyan = 0x00d4ff;
+
+// Only the solid styles (blueprint, realistic) are lit; globe and hologram are unlit.
+scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x10203a, 1.6));
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
+keyLight.position.set(2, 3, 4);
+scene.add(keyLight);
 
 const sphere = new THREE.Mesh(
   new THREE.SphereGeometry(1, 48, 32),
@@ -55,9 +61,8 @@ function toVec(lat, lon, r) {
 }
 
 function resize() {
-  if (!renderer) return;
   const w = canvas.clientWidth || 1, h = canvas.clientHeight || 1;
-  renderer.setSize(w, h, false);
+  if (renderer) renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
@@ -92,6 +97,7 @@ function frame(now) {
     if (Math.abs(m.explodeTo - m.explode) < 0.002) m.explode = m.explodeTo;
     m.parts.forEach(p => p.node.position.copy(p.origin).addScaledVector(p.dir, p.dist * m.explode));
   }
+  pickPart(now);
   if (renderer) renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -160,26 +166,136 @@ function holoMaterial() {
   });
 }
 
-function applyHologram(model, on) {
+const BLUEPRINT_COLOR = 0x0055ff;
+const EDGE_COLOR = 0x00f0ff;
+const STYLES = ["hologram", "blueprint", "realistic"];
+
+function meshesOf(root) {
+  const list = [];
+  root.traverse(o => { if (o.isMesh) list.push(o); });
+  return list;
+}
+
+function blueprintMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: BLUEPRINT_COLOR, roughness: 0.8, metalness: 0.2, side: THREE.DoubleSide,
+    // Pushes the faces back so the edge lines do not z-fight with them.
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+  });
+}
+
+// Callers clear any glow first: this swaps the materials the glow clones from.
+function applyStyle(model, style) {
   model.holo = [];
-  model.root.traverse(o => {
-    if (!o.isMesh) return;
-    if (on && !o.userData.holo) {
-      if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
-      o.userData.base = o.material;
-      o.material = holoMaterial();
-      o.userData.holo = true;
-    } else if (!on && o.userData.holo) {
+  model.meshes.forEach(o => {
+    if (o.userData.base) {
       o.material.dispose();
       o.material = o.userData.base;
       delete o.userData.base;
       delete o.userData.holo;
       delete o.userData.glow;
     }
-    if (o.userData.holo) model.holo.push(o.material);
+    if (o.userData.edgeLines) {
+      const lines = o.userData.edgeLines;
+      o.remove(lines);
+      lines.geometry.dispose();
+      lines.material.dispose();
+      delete o.userData.edgeLines;
+    }
+    if (style === "hologram") {
+      if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+      o.userData.base = o.material;
+      o.material = holoMaterial();
+      o.userData.holo = true;
+      model.holo.push(o.material);
+    } else if (style === "blueprint") {
+      o.userData.base = o.material;
+      o.material = blueprintMaterial();
+      const lines = new THREE.LineSegments(
+        new THREE.EdgesGeometry(o.geometry, 45),
+        new THREE.LineBasicMaterial({ color: EDGE_COLOR })
+      );
+      o.add(lines);
+      o.userData.edgeLines = lines;
+    }
   });
-  model.hologram = on;
+  model.style = style;
+  model.hologram = style === "hologram";
 }
+
+// Hover tooltip: raycasting is throttled and only runs when the mouse moved.
+const tip = document.getElementById("tip");
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const hover = { x: 0, y: 0, pending: false, last: 0, rays: 0, name: "", text: "" };
+const RAY_INTERVAL_MS = 50;
+
+function hideTip() {
+  hover.name = ""; hover.text = "";
+  if (tip) tip.style.display = "none";
+}
+
+function placeTip() {
+  if (!tip) return;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.max(0, Math.min(hover.x + 14, window.innerWidth - w - 4)) + "px";
+  tip.style.top = Math.max(0, Math.min(hover.y + 16, window.innerHeight - h - 4)) + "px";
+}
+
+function showTip(name, text) {
+  hover.name = name; hover.text = text;
+  if (!tip) return;
+  tip.textContent = "";
+  const title = document.createElement("b");
+  title.textContent = name;
+  tip.appendChild(title);
+  if (text) {
+    const body = document.createElement("div");
+    body.textContent = text;
+    tip.appendChild(body);
+  }
+  tip.style.display = "block";
+  placeTip();
+}
+
+// Nearest named ancestor (the model root itself is not a part); a described one wins.
+function partAt(obj, root) {
+  let first = "";
+  for (let o = obj; o && o !== root; o = o.parent) {
+    if (!o.name) continue;
+    if (!first) first = o.name;
+    if (Object.prototype.hasOwnProperty.call(state.partInfo, o.name)) {
+      return { name: o.name, text: state.partInfo[o.name] };
+    }
+  }
+  return { name: first, text: "" };
+}
+
+function pickPart(now) {
+  if (!hover.pending || now - hover.last < RAY_INTERVAL_MS) return;
+  hover.last = now;
+  const m = state.model;
+  if (!m || !m.group.visible) { hover.pending = false; hideTip(); return; }
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  pointer.set(((hover.x - rect.left) / rect.width) * 2 - 1, -((hover.y - rect.top) / rect.height) * 2 + 1);
+  scene.updateMatrixWorld();
+  camera.updateMatrixWorld();
+  raycaster.setFromCamera(pointer, camera);
+  hover.rays++;
+  const hit = raycaster.intersectObjects(m.meshes, false)[0];
+  const part = hit ? partAt(hit.object, m.root) : { name: "", text: "" };
+  if (!part.name) { hover.pending = false; hideTip(); return; }
+  // While the tooltip is up keep re-testing (a spinning model moves under the cursor).
+  if (part.name !== hover.name || part.text !== hover.text) showTip(part.name, part.text);
+  else placeTip();
+}
+
+canvas.addEventListener("mousemove", (e) => {
+  hover.x = e.clientX; hover.y = e.clientY; hover.pending = true;
+  if (tip && tip.style.display === "block") placeTip();
+});
+canvas.addEventListener("mouseleave", () => { hover.pending = false; hideTip(); });
 
 function setGlow(node, on) {
   node.traverse(o => {
@@ -248,7 +364,7 @@ window.jarvisViewer = {
     state.flights = null;
   },
   loadModel(name) {
-    this.clearModel();
+    this.removeModel();
     state.modelStatus = "loading";
     new GLTFLoader().load(
       "models/" + encodeURIComponent(name),
@@ -263,8 +379,8 @@ window.jarvisViewer = {
         group.scale.setScalar(scale);
         scene.add(group);
         group.updateMatrixWorld(true);
-        state.model = { group, root, name, parts: collectParts(root, Math.max(size.x, size.y, size.z) || 1), explode: 0, explodeTo: 0, highlight: "", holo: [], hologram: false };
-        applyHologram(state.model, true);
+        state.model = { group, root, name, meshes: meshesOf(root), parts: collectParts(root, Math.max(size.x, size.y, size.z) || 1), explode: 0, explodeTo: 0, highlight: "", holo: [], hologram: false, style: "hologram" };
+        applyStyle(state.model, "hologram");
         state.modelStatus = "ready";
         globe.visible = false;
         rings.forEach(r => { r.visible = false; });
@@ -285,24 +401,44 @@ window.jarvisViewer = {
     if (node) { setGlow(node, true); m.highlight = name; }
   },
   setHologram(on) {
+    this.setMaterialStyle(on ? "hologram" : "realistic");
+  },
+  setMaterialStyle(style) {
+    style = String(style);
+    if (!STYLES.includes(style)) throw new Error("style must be one of " + STYLES.join(", "));
     const m = state.model;
     if (!m) return;
     const keep = m.highlight;
     if (keep) this.highlightPart("");
-    applyHologram(m, !!on);
+    applyStyle(m, style);
     if (keep) this.highlightPart(keep);
   },
+  setPartInfo(info) {
+    const out = {};
+    if (info && typeof info === "object" && !Array.isArray(info)) {
+      Object.entries(info).slice(0, 200).forEach(([k, v]) => { out[String(k).slice(0, 60)] = String(v).slice(0, 300); });
+    }
+    state.partInfo = out;
+    hover.pending = true;
+  },
   clearModel() {
+    this.removeModel();
+    state.partInfo = {};
+  },
+  removeModel() {
     if (state.model) {
       scene.remove(state.model.group);
       state.model.root.traverse(o => {
         if (o.geometry) o.geometry.dispose();
         [].concat(o.material || []).forEach(m => m.dispose());
+        if (o.userData && o.userData.base) [].concat(o.userData.base).forEach(m => m.dispose());
       });
     }
     state.model = null;
     state.modelStatus = "none";
     state.modelError = "";
+    hover.pending = false;
+    hideTip();
     globe.visible = true;
     rings.forEach(r => { r.visible = true; });
   },
@@ -323,6 +459,11 @@ window.jarvisViewer = {
         highlight: state.model ? state.model.highlight : "",
         glowing: state.model ? (() => { let n = 0; state.model.root.traverse(o => { if (o.userData.orig || o.userData.glow) n++; }); return n; })() : 0,
         hologram: state.model ? state.model.hologram : false,
+        style: state.model ? state.model.style : "",
+        edges: state.model ? state.model.meshes.filter(o => o.userData.edgeLines).length : 0,
+        meshColors: state.model ? state.model.meshes.map(o => [].concat(o.material)[0].color ? [].concat(o.material)[0].color.getHexString() : "") : [],
+        partInfo: Object.keys(state.partInfo).length,
+        hover: { name: hover.name, text: hover.text, rays: hover.rays, visible: !!tip && tip.style.display === "block" },
         shaderError: state.shaderError,
       },
       spin: state.spin,

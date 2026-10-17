@@ -10,4 +10,4 @@ set NODE_PATH=<cartella temporanea>\node_modules
 npx esbuild <percorso>/src/viewer.js --bundle --minify --format=iife --outfile=<percorso>/viewer.bundle.js
 ```
 
-API JS esposta come `window.jarvisViewer`: `flyTo(lat, lon)`, `addMarker(lat, lon, label)`, `clearMarkers()`, `spin(on)`, `getState()`.
+API JS esposta come `window.jarvisViewer`: `flyTo(lat, lon)`, `addMarker(lat, lon, label)`, `clearMarkers()`, `spin(on)`, `setMaterialStyle('hologram'|'blueprint'|'realistic')`, `setPartInfo({parte: descrizione})` (tooltip al passaggio del mouse), `getState()`.
