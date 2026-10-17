@@ -47,7 +47,7 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 - [x] `ConnectorAuth` (`begin_oauth`, `complete`, `refresh`, `revoke`, `status`) + implementazione `SecretStoreAuth`
 - [x] Trasporti (`core/mcp_transport.py`): HTTP streamable con handshake `initialize`, Bearer, risposta JSON o SSE, solo https (http su loopback); stdio riusando `McpStdioClient`
 - [x] Namespace stabile `gmail.search`, mappato al nome nudo del server
-- [ ] Flusso OAuth interattivo reale (browser + redirect + refresh) e verifica contro server veri: NON fatto. Oggi il token si inserisce con `registry_cli connect`. I nomi dei tool/scope del catalogo sono un contratto dichiarato, non verificato contro i server reali. Per Google, Canva, Spotify manca l'endpoint
+- [ ] Flusso OAuth interattivo reale (browser + redirect + refresh) e verifica contro server veri: NON fatto. Verificato solo che l'endpoint GitHub `https://api.githubcopilot.com/mcp/` esiste e risponde 401 senza token, e che `HttpMcpInvoker` lo mappa a `McpTransportError` (2026-10-17). Serve un token dell'utente (`registry_cli connect github`) per verificare `search_repositories`/`create_issue`; nomi dei tool/scope del catalogo non verificati. Per Google, Canva, Spotify manca l'endpoint
 - Accettazione: ciclo enable → authenticate → scope → revoke testato con connettore del catalogo (fatto).
 
 ## Fase 4: Skill dichiarative
