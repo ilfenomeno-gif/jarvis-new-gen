@@ -55,19 +55,14 @@ from memory.memory_manager import (
 )
 
 from actions.file_processor import file_processor
-from actions.flight_finder     import flight_finder
 from actions.open_app          import open_app
 from actions.computer_settings import computer_settings
 from actions.screen_processor  import _capture_camera, _capture_screen
 from actions.youtube_video     import youtube_video
-from actions.desktop           import desktop_control
 from actions.browser_control   import browser_control, read_active_page
-from actions.file_controller   import file_controller
 from actions.code_helper       import code_helper
 from actions.dev_agent         import dev_agent
 from actions.web_search        import web_search as web_search_action
-from actions.large_file_reader import large_file_action
-from actions.proxy_launcher    import proxy_launcher_action
 from agents.supervisor_agent   import supervisor_action
 from agents.research_agent     import research_action
 from agents.coder_agent        import coder_action
@@ -507,39 +502,6 @@ TOOL_DECLARATIONS = [
         },
     },
     {
-        "name": "file_controller",
-        "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "action":      {"type": "STRING", "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | info"},
-                "path":        {"type": "STRING", "description": "File/folder path or shortcut: desktop, downloads, documents, home"},
-                "destination": {"type": "STRING", "description": "Destination path for move/copy"},
-                "new_name":    {"type": "STRING", "description": "New name for rename"},
-                "content":     {"type": "STRING", "description": "Content for create_file/write"},
-                "name":        {"type": "STRING", "description": "File name to search for"},
-                "extension":   {"type": "STRING", "description": "File extension to search (e.g. .pdf)"},
-                "count":       {"type": "INTEGER", "description": "Number of results for largest"},
-            },
-            "required": ["action"]
-        }
-    },
-    {
-        "name": "desktop_control",
-        "description": "Controls the desktop: wallpaper, organize, clean, list, stats.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "action": {"type": "STRING", "description": "wallpaper | wallpaper_url | organize | clean | list | stats | task"},
-                "path":   {"type": "STRING", "description": "Image path for wallpaper"},
-                "url":    {"type": "STRING", "description": "Image URL for wallpaper_url"},
-                "mode":   {"type": "STRING", "description": "by_type or by_date for organize"},
-                "task":   {"type": "STRING", "description": "Natural language desktop task"},
-            },
-            "required": ["action"]
-        }
-    },
-    {
         "name": "code_helper",
         "description": "Writes, edits, explains, runs, or builds code files.",
         "parameters": {
@@ -619,30 +581,6 @@ TOOL_DECLARATIONS = [
         }
     },
     {
-        "name": "large_file_reader",
-        "description": "Reads very large files (txt, log, code, etc.) in streaming chunks and processes each chunk with an AI instruction. Use this when a file is too big to read in one shot.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "file_path":   {"type": "STRING", "description": "Absolute path to the file to read."},
-                "instruction": {"type": "STRING", "description": "What to do with each chunk (e.g. 'Summarize', 'Find errors', 'Extract names')."},
-            },
-            "required": ["file_path"]
-        }
-    },
-    {
-        "name": "proxy_launcher",
-        "description": "Runs a shell command in a subprocess bypassing pythonw.exe whitelist restrictions. Use for build commands, compilation, or any system-level execution.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "command": {"type": "STRING", "description": "Command to run, e.g. 'python build.py' or 'npm install'."},
-                "cwd":     {"type": "STRING", "description": "Working directory."},
-            },
-            "required": ["command"]
-        }
-    },
-    {
         "name": "computer_control",
         "description": "Direct computer control: type, click, hotkeys, scroll, move mouse, screenshots, find elements on screen.",
         "parameters": {
@@ -689,23 +627,6 @@ TOOL_DECLARATIONS = [
                 "shutdown_when_done": {"type": "BOOLEAN", "description": "Shut down PC when download finishes"},
             },
             "required": []
-        }
-    },
-    {
-        "name": "flight_finder",
-        "description": "Searches Google Flights and speaks the best options.",
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "origin":      {"type": "STRING",  "description": "Departure city or airport code"},
-                "destination": {"type": "STRING",  "description": "Arrival city or airport code"},
-                "date":        {"type": "STRING",  "description": "Departure date (any format)"},
-                "return_date": {"type": "STRING",  "description": "Return date for round trips"},
-                "passengers":  {"type": "INTEGER", "description": "Number of passengers (default: 1)"},
-                "cabin":       {"type": "STRING",  "description": "economy | premium | business | first"},
-                "save":        {"type": "BOOLEAN", "description": "Save results to Notepad"},
-            },
-            "required": ["origin", "destination", "date"]
         }
     },
     {
@@ -1525,10 +1446,6 @@ class JarvisLive:
                 self.ui.stop_reading()
                 result = "Requested that the integrated browser page reader stop."
 
-            elif name == "file_controller":
-                r = await loop.run_in_executor(None, lambda: file_controller(parameters=args, player=self.ui))
-                result = r or "Done."
-
             elif name == "youtube_video":
                 r = await loop.run_in_executor(None, lambda: youtube_video(parameters=args, response=None, player=self.ui))
                 result = r or "Done."
@@ -1593,10 +1510,6 @@ class JarvisLive:
                 r = await loop.run_in_executor(None, lambda: computer_settings(parameters=args, response=None, player=self.ui))
                 result = r or "Done."
 
-            elif name == "desktop_control":
-                r = await loop.run_in_executor(None, lambda: desktop_control(parameters=args, player=self.ui))
-                result = r or "Done."
-
             elif name == "code_helper":
                 r = await loop.run_in_executor(None, lambda: code_helper(parameters=args, player=self.ui, speak=self.speak))
                 result = r or "Done."
@@ -1619,14 +1532,6 @@ class JarvisLive:
 
             elif name == "debugger_agent":
                 r = await loop.run_in_executor(None, lambda: debugger_action(parameters=args, player=self.ui))
-                result = r or "Done."
-
-            elif name == "large_file_reader":
-                r = await loop.run_in_executor(None, lambda: large_file_action(parameters=args, player=self.ui))
-                result = r or "Done."
-
-            elif name == "proxy_launcher":
-                r = await loop.run_in_executor(None, lambda: proxy_launcher_action(parameters=args, player=self.ui))
                 result = r or "Done."
 
             elif name == "web_search":
@@ -1653,10 +1558,6 @@ class JarvisLive:
 
             elif name == "game_updater":
                 r = await loop.run_in_executor(None, lambda: game_updater(parameters=args, player=self.ui, speak=self.speak))
-                result = r or "Done."
-
-            elif name == "flight_finder":
-                r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))
                 result = r or "Done."
 
             elif name == "system_status":

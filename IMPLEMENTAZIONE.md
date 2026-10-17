@@ -24,6 +24,7 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 
 - [x] Inventario dei rami statici di `_execute_tool`. Già nel registry: `weather_report`, `send_message`, `reminder`, `vscode_*`. Restano statici (da migrare a gruppi): `open_app`, `browser_control`, `file_controller`, `youtube_video`, `computer_settings`, `desktop_control`, `code_helper`, `dev_agent`, `large_file_reader`, `proxy_launcher`, `computer_control`, `game_updater`, `flight_finder`, agenti. Restano core per scelta: `save_memory`, `recall_memory`, `undo`, `open_website`, `press_key`, `click_link`, `read_page`, `stop_reading`, `screen_process`, `close_camera`, `web_search`, `file_processor`, `system_status`, `manage_monitor`, `shutdown_jarvis` (dipendono dallo stato interno di `main.py`)
 - [x] Migrati 3 tool (`weather_report`, `send_message`, `reminder`) con rimozione di dichiarazione, ramo e import da `main.py`
+- [x] Migrati altri 5 tool (`file_controller`, `desktop_control`, `large_file_reader`, `proxy_launcher`, `flight_finder`), stesso schema. Restano statici, ancora da migrare: `open_app`, `browser_control`, `youtube_video`, `computer_settings`, `code_helper`, `dev_agent`, `computer_control`, `game_updater`, agenti (dichiarazioni lunghe, da fare a gruppi). `read_active_page` condivide il modulo con `browser_control`, che può esporre un solo `TOOL`
 - [x] Campo `risk_class` (`read`, `write`, `destructive`) nel contratto `TOOL`, validato
 - [x] Conferma per `destructive`: parametro `confirmed` aggiunto alla dichiarazione, esecuzione rifiutata senza `confirmed=true`
 - [ ] Migrare i rami statici rimanenti elencati sopra (lavoro ripetibile, un gruppo per volta; ogni migrazione = `TOOL` nel modulo + rimozione ramo/dichiarazione)
@@ -90,4 +91,4 @@ Principio guida: *i connettori (MCP) sono infrastruttura, le skill sono conoscen
 | 2026-10-17 | Fase 0 | JARVIS 347 passed; estensione 10 passed (locale); CI remota su `5dee2ea`: jarvis, gev, vscode-extension tutti success |
 | 2026-10-17 | Fasi 1-6 | JARVIS 366 passed; estensione 11 passed + `npm ci --dry-run` ok; `py_compile main.py` ok; DPAPI roundtrip reale ok; trasporto HTTP provato contro un server locale di prova |
 | 2026-10-17 | `verifica.py` | 40/40 controlli OK in locale (suite completa inclusa) |
-| 2026-10-17 | Chiave Gemini nel SecretStore | JARVIS 372 passed; roundtrip DPAPI reale con `--remove-plain` su cartella temporanea ok |
+| 2026-10-17 | Chiave Gemini nel SecretStore | JARVIS 372 passed; roundtrip DPAPI reale con `--remove-plain` su cartella temporanea ok || 2026-10-17 | Migrazione 5 tool in registry | JARVIS 372 passed; registry carica 13 azioni; esecuzione reale di large_file_reader e proxy_launcher via registry ok |

@@ -39,3 +39,18 @@ def proxy_launcher_action(parameters: dict, **kwargs) -> str:
     if not command:
         return json.dumps({"error": "No command provided."})
     return run_isolated_command(command, cwd)
+
+
+TOOL = {
+    "name": "proxy_launcher",
+    "description": "Runs a shell command in a subprocess bypassing pythonw.exe whitelist restrictions. Use for build commands, compilation, or any system-level execution.",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "command": {"type": "STRING", "description": "Command to run, e.g. 'python build.py' or 'npm install'."},
+            "cwd":     {"type": "STRING", "description": "Working directory."},
+        },
+        "required": ["command"]
+    },
+    "handler": proxy_launcher_action,
+}

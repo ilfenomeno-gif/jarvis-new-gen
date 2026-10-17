@@ -45,3 +45,18 @@ def large_file_action(parameters: dict, **kwargs) -> str:
     if not file_path:
         return "Devi specificare un file_path."
     return process_large_file(file_path, instruction)
+
+
+TOOL = {
+    "name": "large_file_reader",
+    "description": "Reads very large files (txt, log, code, etc.) in streaming chunks and processes each chunk with an AI instruction. Use this when a file is too big to read in one shot.",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "file_path":   {"type": "STRING", "description": "Absolute path to the file to read."},
+            "instruction": {"type": "STRING", "description": "What to do with each chunk (e.g. 'Summarize', 'Find errors', 'Extract names')."},
+        },
+        "required": ["file_path"]
+    },
+    "handler": large_file_action,
+}
