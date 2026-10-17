@@ -80,3 +80,24 @@ def test_real_page_loads_and_receives_commands():
     state = json.loads(result["state"])
     assert state["ready"] and state["flying"]
     assert state["markers"] == [{"lat": 41.9, "lon": 12.5, "label": "Roma"}]
+
+
+def test_fly_to_and_recon_bring_viewer_to_front():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    jarvis = ui_module.JarvisUI("")
+    win = jarvis._win
+    assert win._hud_cam_stack.currentWidget() is win.hud
+
+    viewer_3d.viewer_3d({"mode": "fly_to", "lat": 1, "lon": 2}, player=jarvis)
+    app.processEvents()
+    assert win._hud_cam_stack.currentWidget() is win._viewer3d
+
+    win.show_viewer3d(False)
+    assert win._hud_cam_stack.currentWidget() is win.hud
+    jarvis.apply_workspace("recon")
+    app.processEvents()
+    assert win._hud_cam_stack.currentWidget() is win._viewer3d

@@ -2962,6 +2962,8 @@ class MainWindow(QMainWindow):
     def apply_workspace(self, name: str) -> None:
         self._panel_state.apply_workspace(name)
         self._render_panels()
+        if name == "recon":
+            self.show_viewer3d(True)
 
     def set_panel_visible(self, panel: str, visible: bool) -> None:
         self._panel_state.set_visible(panel, visible)
@@ -3009,6 +3011,8 @@ class MainWindow(QMainWindow):
             f"(...JSON.parse({json.dumps(args_json)}))"
         )
         self._viewer3d_ensure()
+        if function in ("flyTo", "addMarker"):
+            self.show_viewer3d(True)
         if self._viewer3d_loaded:
             self._viewer3d.page().runJavaScript(script)
         else:

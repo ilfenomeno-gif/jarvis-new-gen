@@ -30,3 +30,4 @@ Regole: la UI è PyQt6 nativo (`ui.py`); il core resta Python. La UI non legge n
 | 2026-10-17 | U1 | pytest 385 passed; test_real_window_renders_each_workspace su JarvisUI offscreen ok |
 | 2026-10-17 | U2, U3 | pytest 388 passed; test_viewer3d: pagina Three.js reale caricata offscreen, stato JS riletto (ready, flying, marker) |
 | 2026-10-17 | U2 fix | CI 4882b3c: job jarvis rosso (WebGL2 blocklisted su runner, jarvisViewer non esposto). Viewer ora tollerante (getState.webgl); test passato con e senza WebGL (--disable-webgl) |
+| 2026-10-17 | U2/U3 fix a schermo | Segnalato: tool 'Eseguito' ma radar 2D visibile. Ora fly_to/add_marker portano in primo piano il globo, workspace recon lo mostra, HTML con sfondo nero e testo 'Inizializzazione Ologramma...'. 389 test; verificato currentWidget e isVisible su finestra offscreen (grab WebEngine nero offscreen: non prova il rendering GPU) |

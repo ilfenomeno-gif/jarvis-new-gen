@@ -120,4 +120,9 @@ window.jarvisViewer = {
 
 resize();
 state.ready = true;
+const boot = document.getElementById("boot");
+if (boot) {
+  if (renderer) boot.remove();
+  else boot.textContent = "WebGL non disponibile";
+}
 requestAnimationFrame(frame);
