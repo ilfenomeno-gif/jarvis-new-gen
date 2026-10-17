@@ -2656,6 +2656,8 @@ class MainWindow(QMainWindow):
     _focus_mode_sig = pyqtSignal(bool)
     _workspace_sig = pyqtSignal(str)
     _panel_sig = pyqtSignal(str, bool)
+    _viewer_show_sig = pyqtSignal(bool)
+    _viewer_call_sig = pyqtSignal(str, str)
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -2900,6 +2902,8 @@ class MainWindow(QMainWindow):
         self._focus_mode_sig.connect(self.set_focus_mode)
         self._workspace_sig.connect(self.apply_workspace)
         self._panel_sig.connect(self.set_panel_visible)
+        self._viewer_show_sig.connect(self.show_viewer3d)
+        self._viewer_call_sig.connect(self.viewer3d_call)
         self._browser_key_sig.connect(self._press_key_in_webview)
         self._browser_click_sig.connect(self._click_link_in_webview)
         self._browser_read_page_sig.connect(self._read_page_aloud)
@@ -2962,6 +2966,53 @@ class MainWindow(QMainWindow):
     def set_panel_visible(self, panel: str, visible: bool) -> None:
         self._panel_state.set_visible(panel, visible)
         self._render_panels()
+
+    _viewer3d = None
+    _viewer3d_loaded = False
+    _viewer3d_pending: list = []
+
+    def _viewer3d_ensure(self):
+        if self._viewer3d is None:
+            view = QWebEngineView()
+            view.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            )
+            view.loadFinished.connect(self._viewer3d_on_loaded)
+            self._viewer3d_pending = []
+            view.load(QUrl.fromLocalFile(
+                str(BASE_DIR / "assets" / "viewer3d" / "index.html")
+            ))
+            self._hud_cam_stack.addWidget(view)
+            self._viewer3d = view
+        return self._viewer3d
+
+    def _viewer3d_on_loaded(self, ok: bool) -> None:
+        self._viewer3d_loaded = bool(ok)
+        pending, self._viewer3d_pending = self._viewer3d_pending, []
+        if ok:
+            for script in pending:
+                self._viewer3d.page().runJavaScript(script)
+
+    def show_viewer3d(self, visible: bool) -> None:
+        if visible:
+            view = self._viewer3d_ensure()
+            self._hud_cam_stack.setCurrentWidget(view)
+            self._main_content_stack.setCurrentWidget(self._hud_cam_stack)
+        elif self._viewer3d is not None:
+            self._hud_cam_stack.setCurrentWidget(self.hud)
+
+    def viewer3d_call(self, function: str, args_json: str) -> None:
+        from core.viewer3d import build_call
+        function, args_json = build_call(function, json.loads(args_json))
+        script = (
+            f"window.jarvisViewer.{function}"
+            f"(...JSON.parse({json.dumps(args_json)}))"
+        )
+        self._viewer3d_ensure()
+        if self._viewer3d_loaded:
+            self._viewer3d.page().runJavaScript(script)
+        else:
+            self._viewer3d_pending.append(script)
 
     def _render_panels(self) -> None:
         widgets = {
@@ -5477,6 +5528,15 @@ class JarvisUI:
 
     def set_panel_visible(self, panel: str, visible: bool) -> None:
         self._win._panel_sig.emit(str(panel), bool(visible))
+
+    def viewer3d_show(self, visible: bool) -> None:
+        self._win._viewer_show_sig.emit(bool(visible))
+
+    def viewer3d_call(self, function: str, args: list) -> None:
+        """Validated here so the tool thread gets the error, not the Qt slot."""
+        from core.viewer3d import build_call
+        function, args_json = build_call(function, args)
+        self._win._viewer_call_sig.emit(function, json.dumps(json.loads(args_json)))
 
     def panel_status(self) -> dict:
         state = self._win._panel_state
