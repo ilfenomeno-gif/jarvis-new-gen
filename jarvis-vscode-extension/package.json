@@ -12,6 +12,7 @@
   ],
   "activationEvents": [
     "onCommand:jarvis.openPanel",
+    "onCommand:jarvis.setConnectionToken",
     "onView:jarvis.sidebar"
   ],
   "main": "./dist/extension.js",
@@ -20,6 +21,10 @@
       {
         "command": "jarvis.openPanel",
         "title": "JARVIS: Open Panel"
+      },
+      {
+        "command": "jarvis.setConnectionToken",
+        "title": "JARVIS: Set Connection Token"
       }
     ],
     "viewsContainers": {
@@ -48,12 +53,6 @@
           "minimum": 1,
           "maximum": 65535,
           "description": "Local JARVIS WebSocket server port."
-        },
-        "jarvis.wsToken": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "description": "Shared token for the local JARVIS WebSocket server."
         }
       }
     }

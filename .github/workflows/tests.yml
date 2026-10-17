@@ -48,3 +48,21 @@ jobs:
         run: npm ci
       - name: Run GEV tests
         run: npm test
+
+  vscode-extension:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: jarvis-vscode-extension
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.14.0"
+          cache: npm
+          cache-dependency-path: jarvis-vscode-extension/package-lock.json
+      - name: Install locked extension dependencies
+        run: npm ci
+      - name: Run extension tests
+        run: npm test

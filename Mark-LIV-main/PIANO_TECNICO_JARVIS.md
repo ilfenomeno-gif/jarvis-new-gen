@@ -267,9 +267,10 @@ Installare e validare Tesseract nell'interprete Python 3.13 corretto, aggiungere
 
 - `main.py` è l'entrypoint: inizializza Qt, audio, Gemini Live, memoria, plugin, dashboard e task di monitoraggio.
 - `core/` contiene guardrail subprocess, memoria, conferme, undo, prompt statico e routing dinamico dei prompt.
-- `actions/` contiene i tool operativi per file, browser, desktop, messaggistica, OCR/visione, giochi, sistema, web e sviluppo.
-- `plugins/` viene scoperta e validata all'avvio; i nomi che collidono con tool core vengono rifiutati.
+- `actions/` contiene i tool operativi per file, browser, desktop, messaggistica, OCR/visione, giochi, sistema, web e sviluppo. I moduli che dichiarano `TOOL` sono scoperti, dichiarati al modello e instradati tramite `core/action_loader.py`.
+- `plugins/` viene scoperta e validata all'avvio; i nomi che collidono con tool core o azioni registrate vengono rifiutati.
 - `dashboard/` espone il controllo remoto locale con token temporanei e cifratura dei messaggi.
+- Le azioni dichiarative non sostituiscono ancora i rami statici di `main.py`; skill procedurali e workflow multi-step non sono ancora implementati.
 
 ### Finding critici risolti
 
@@ -339,14 +340,14 @@ Prova reale eseguita con client WebSocket locale: auth valido → `auth_ok` e st
 ### Implementazione e risultati
 
 - File creati: `package.json`, `package-lock.json`, `tsconfig.json`, `.vscodeignore`, `.gitignore`, `src/extension.ts`, `src/protocol.ts`, `src/webview/index.html`, `src/webview/main.js`, `media/style.css`, `media/icon.svg` e `test/protocol.test.cjs`.
-- Comando registrato: `jarvis.openPanel`; la vista laterale JARVIS usa il WebSocket locale `127.0.0.1` e la porta `jarvis.wsPort` (predefinita 8765). Il token viene letto prima da `JARVIS_WS_TOKEN`, poi da `jarvis.wsToken`; se manca, il pannello lo segnala e non avvia la connessione.
+- Comandi registrati: `jarvis.openPanel` e `jarvis.setConnectionToken`; la vista laterale JARVIS usa il WebSocket locale `127.0.0.1` e la porta `jarvis.wsPort` (predefinita 8765). Il token viene letto prima da `JARVIS_WS_TOKEN`, poi da VS Code SecretStorage. I precedenti valori `jarvis.wsToken` vengono migrati e rimossi dalle impostazioni utente al primo collegamento; se VS Code non può rimuoverli, mostra un avviso.
 - L'estensione invia auth e ping, interpreta auth/status/pong/reply e applica backoff esponenziale con massimo cinque tentativi. L'invio nel pannello è solo locale e chiarisce che la chat Gemini arriverà nella fase 5c.
 - Verifica: `npm test` — compilazione TypeScript superata, **3 passed**; `npx vsce package --no-dependencies` — VSIX generata in `jarvis-vscode-extension\jarvis-vscode-extension-0.1.0.vsix`; `npm audit` — **0 vulnerabilità**.
 - Il packaging segnala che il manifest non dichiara `repository` e che non è presente un file LICENSE; la generazione della VSIX riesce comunque. L'SVG è usato come icona della vista laterale, non come icona di pacchetto.
 
 ### Prova manuale residua
 
-VSIX installata tramite VS Code CLI come `jarvis-local.jarvis-vscode-extension@0.1.0`. Da fare nell'editor: aprire **JARVIS: Open Panel**, configurare `jarvis.wsToken` (o `JARVIS_WS_TOKEN` nell'ambiente dell'extension host) e verificare che la vista riceva lo stato autenticato dal server reale. La prova visuale e l'handshake dal webview restano **DA ESEGUIRE**.
+VSIX installata tramite VS Code CLI come `jarvis-local.jarvis-vscode-extension@0.1.0`. Da fare nell'editor: avviare JARVIS, eseguire **JARVIS: Set Connection Token** (oppure impostare `JARVIS_WS_TOKEN` nell'ambiente dell'Extension Host), aprire **JARVIS: Open Panel** e verificare che la vista riceva lo stato autenticato dal server reale. La prova visuale e l'handshake dal WebView restano **DA ESEGUIRE**.
 
 ## Fase 5c-chat-extension
 
@@ -370,7 +371,7 @@ VSIX installata tramite VS Code CLI come `jarvis-local.jarvis-vscode-extension@0
 
 ### Prova manuale residua
 
-La VSIX aggiornata è stata generata e installata, ma la prova completa richiede ancora di aprire il pannello nell'editor. Avviare JARVIS e il suo WebSocket locale, configurare `jarvis.wsToken` o `JARVIS_WS_TOKEN`, aprire il pannello e inviare “Mi chiamo Marco”, poi “Come mi chiamo?”. Atteso: la risposta usa la cronologia locale e ricorda Marco. Il percorso Gemini backend ha risposto correttamente usando `gemini-3.8-flash`; la convalida visuale della WebView resta **DA ESEGUIRE**.
+La VSIX aggiornata è stata generata e installata, ma la prova completa richiede ancora di aprire il pannello nell'editor. Avviare JARVIS e il suo WebSocket locale, eseguire **JARVIS: Set Connection Token** (o impostare `JARVIS_WS_TOKEN`), aprire il pannello e inviare “Mi chiamo Marco”, poi “Come mi chiamo?”. Atteso: la risposta usa la cronologia locale e ricorda Marco. Il percorso Gemini backend ha risposto correttamente usando `gemini-3.8-flash`; la convalida visuale della WebView resta **DA ESEGUIRE**.
 
 ## GEV e thinking nativo Gemini
 

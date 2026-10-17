@@ -68,6 +68,13 @@ I test automatici non richiedono una chiave Gemini:
 python -m pytest -q
 ```
 
+JARVIS compone dichiarazioni e dispatch da tre fonti: tool core, azioni
+built-in e plugin. I moduli `actions/*.py` con contratto `TOOL` sono scoperti
+da `core/action_loader.py`; i plugin continuano a usare
+`core/plugin_loader.py` e le integrazioni MCP esistenti. La VS Code extension è
+un client del servizio locale, non un secondo runtime per i tool. Skill
+dichiarative e workflow multi-step non sono ancora implementati.
+
 La suite non sostituisce la convalida live dell'interfaccia, del microfono,
 dell'audio, di Gemini o dei provider dati GEV.
 
@@ -86,6 +93,8 @@ dell'audio, di Gemini o dei provider dati GEV.
 Per dettagli e passaggi di sviluppo, consulta
 [`Mark-LIV-main/readme.md`](./Mark-LIV-main/readme.md) e
 [`Mark-LIV-main/IMPLEMENTATION.md`](./Mark-LIV-main/IMPLEMENTATION.md).
+Per configurare l'estensione VS Code, segui
+[`jarvis-vscode-extension/README.md`](./jarvis-vscode-extension/README.md).
 L'archivio GEV descrive fotografie precedenti del lavoro: non usare la
 percentuale riportata nei suoi documenti come misura dello stato corrente.
 

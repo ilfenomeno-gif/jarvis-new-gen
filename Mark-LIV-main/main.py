@@ -87,6 +87,7 @@ from memory.config_manager     import (
     get_brief_enabled, get_voice, get_input_device, get_output_device,
 )
 from core.plugin_loader        import discover_plugins
+from core.action_loader        import discover_actions
 from core.intent_router        import route_tool
 from core.geo_router           import classify_and_route
 from core.prompt_router        import PromptRouter
@@ -1062,6 +1063,15 @@ class JarvisLive:
         self._enhanced_live = True  # affective dialog + proactive audio; auto-disabled if the server rejects them
         self._thinking_enabled = True
         _core_names = {t["name"] for t in TOOL_DECLARATIONS}
+        self._action_registry = discover_actions(
+            actions_dir=Path(__file__).resolve().parent / "actions",
+            reserved_names=_core_names,
+            logger=lambda msg: (
+                print(f"[Actions] {msg}"),
+                self.ui.write_log(f"SYS: {msg}"),
+            ),
+        )
+        _core_names.update(self._action_registry.names())
         self._plugin_registry = discover_plugins(
             plugins_dir=Path(__file__).resolve().parent / "plugins",
             core_tool_names=_core_names,
@@ -1406,7 +1416,13 @@ class JarvisLive:
             output_audio_transcription={},
             input_audio_transcription={},
             system_instruction="\n".join(parts),
-            tools=[{"function_declarations": TOOL_DECLARATIONS + self._plugin_registry.get_tool_declarations()}],
+            tools=[{
+                "function_declarations": (
+                    TOOL_DECLARATIONS
+                    + self._action_registry.get_tool_declarations()
+                    + self._plugin_registry.get_tool_declarations()
+                )
+            }],
             # Hand back the handle captured from the last session_resumption
             # update. `handle=None` is exactly the old behaviour (ask for
             # handles, start fresh), so the first connect of a run is unchanged.
@@ -1480,7 +1496,22 @@ class JarvisLive:
         result = "Done."
 
         try:
-            if name == "recall_memory":
+            if self._action_registry.has(name):
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: self._action_registry.run(
+                        name,
+                        args,
+                        ctx={
+                            "player": self.ui,
+                            "speak": self.speak,
+                            "response": None,
+                            "session_memory": None,
+                        },
+                    ),
+                )
+
+            elif name == "recall_memory":
                 # Local file search: no network, no second model. Kept out of
                 # the executor deliberately — it is a dictionary scan over a few
                 # hundred short strings, and a thread hop would cost more than
