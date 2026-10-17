@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 
 const state = {
   markers: [], target: null, spin: true, ready: false, flights: null,
@@ -13,6 +14,8 @@ let renderer = null;
 try {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
   renderer.setClearColor(0x000308, 1);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.debug.onShaderError = () => { state.shaderError = "shader compile failed"; };
 } catch (e) {
   console.error("WebGL non disponibile: " + e.message);
@@ -42,10 +45,76 @@ scene.add(globe);
 const cyan = 0x00d4ff;
 
 // Only the solid styles (blueprint, realistic) are lit; globe and hologram are unlit.
-scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x10203a, 1.6));
+const hemiLight = new THREE.HemisphereLight(0xcfe8ff, 0x10203a, 1.6);
+scene.add(hemiLight);
 const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
 keyLight.position.set(2, 3, 4);
+// Shadows are only cast in the realistic style (see syncLook).
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.left = -2.2; keyLight.shadow.camera.right = 2.2;
+keyLight.shadow.camera.top = 2.2; keyLight.shadow.camera.bottom = -2.2;
+keyLight.shadow.camera.near = 0.5; keyLight.shadow.camera.far = 12;
+keyLight.shadow.bias = -0.0005;
+keyLight.shadow.normalBias = 0.02;
 scene.add(keyLight);
+
+// Invisible floor that only shows the model's shadow.
+const shadowFloor = new THREE.Mesh(
+  new THREE.PlaneGeometry(8, 8),
+  new THREE.ShadowMaterial({ opacity: 0.45 })
+);
+shadowFloor.rotation.x = -Math.PI / 2;
+shadowFloor.receiveShadow = true;
+shadowFloor.visible = false;
+scene.add(shadowFloor);
+
+// Studio HDRI (Poly Haven, CC0): loaded once, on first use of the realistic style.
+let envMap = null;
+let envLoading = false;
+function loadEnvironment() {
+  if (!renderer || envMap || envLoading) return;
+  envLoading = true;
+  new RGBELoader().load(
+    "hdr/studio.hdr",
+    (tex) => {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      envMap = pmrem.fromEquirectangular(tex).texture;
+      tex.dispose();
+      pmrem.dispose();
+      envLoading = false;
+      syncLook();
+    },
+    undefined,
+    () => { envLoading = false; state.envError = "hdri not loaded"; }
+  );
+}
+
+// Realistic = PBR look: environment reflections, tone mapping, shadows. The other styles
+// keep their flat look (no environment, no tone mapping, no shadow pass).
+function syncLook() {
+  if (!renderer) return;
+  const realistic = !!state.model && state.model.style === "realistic";
+  if (realistic) loadEnvironment();
+  scene.environment = realistic ? envMap : null;
+  // The HDRI already lights the model: lower the stage lights so metal does not blow out.
+  hemiLight.intensity = realistic ? 0.15 : 1.6;
+  keyLight.intensity = realistic ? 1.1 : 2.4;
+  scene.environmentIntensity = 0.4;
+  const tone = realistic ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+  if (renderer.toneMapping !== tone) {
+    renderer.toneMapping = tone;
+    scene.traverse(o => { if (o.material) [].concat(o.material).forEach(m => { m.needsUpdate = true; }); });
+  }
+  keyLight.castShadow = realistic;
+  shadowFloor.visible = realistic;
+  if (state.model) {
+    state.model.meshes.forEach(o => { o.castShadow = realistic; o.receiveShadow = realistic; });
+    if (realistic) {
+      state.model.group.updateMatrixWorld(true);
+      shadowFloor.position.y = new THREE.Box3().setFromObject(state.model.group).min.y - 0.02;
+    }
+  }
+}
 
 const sphere = new THREE.Mesh(
   new THREE.SphereGeometry(1, 48, 32),
@@ -290,14 +359,24 @@ function showTip(name, text) {
   placeTip();
 }
 
+// TripoSR names its single mesh "geometry_0": show the model's own name instead.
+const GENERIC_NAME = /^geometry(_?\d+)?$/i;
+function modelLabel() {
+  const file = state.model ? state.model.name : "";
+  let base = file.split("/").pop().replace(/\.(glb|gltf)$/i, "");
+  base = base.replace(/-[0-9a-f]{6}$/i, "").replace(/^image-/i, "").replace(/[-_]+/g, " ").trim();
+  return base ? base.charAt(0).toUpperCase() + base.slice(1) : "Modello";
+}
+
 // Nearest named ancestor (the model root itself is not a part); a described one wins.
 function partAt(obj, root) {
   let first = "";
   for (let o = obj; o && o !== root; o = o.parent) {
     if (!o.name) continue;
-    if (!first) first = o.name;
-    if (Object.prototype.hasOwnProperty.call(state.partInfo, o.name)) {
-      return { name: o.name, text: state.partInfo[o.name] };
+    const shown = GENERIC_NAME.test(o.name) ? modelLabel() : o.name;
+    if (!first) first = shown;
+    if (Object.prototype.hasOwnProperty.call(state.partInfo, shown)) {
+      return { name: shown, text: state.partInfo[shown] };
     }
   }
   if (first) return { name: first, text: "" };
@@ -421,6 +500,7 @@ window.jarvisViewer = {
         group.updateMatrixWorld(true);
         state.model = { group, root, name, meshes: meshesOf(root), parts: collectParts(root, Math.max(size.x, size.y, size.z) || 1), explode: 0, explodeTo: 0, highlight: "", holo: [], hologram: false, style: "hologram" };
                 applyStyle(state.model, state.style);
+        syncLook();
         state.modelStatus = "ready";
         syncControls();
         globe.visible = false;
@@ -453,6 +533,7 @@ window.jarvisViewer = {
     const keep = m.highlight;
     if (keep) this.highlightPart("");
     applyStyle(m, style);
+    syncLook();
     if (keep) this.highlightPart(keep);
   },
   setPartInfo(info) {
@@ -479,6 +560,7 @@ window.jarvisViewer = {
     state.model = null;
     state.modelStatus = "none";
     state.modelError = "";
+    syncLook();
     syncControls();
     resetCamera();
     hideTip();
@@ -496,9 +578,11 @@ window.jarvisViewer = {
       webgl: !!renderer,
       controls: { enabled: controls.enabled, wanted: state.controlsOn, distance: Number(camera.position.distanceTo(controls.target).toFixed(3)), azimuth: Number(controls.getAzimuthalAngle().toFixed(3)) },
       flights: state.flights ? state.flights.list.length : 0,
+      look: { environment: !!scene.environment, envLoaded: !!envMap, envError: state.envError || "", shadows: keyLight.castShadow, shadowFloor: shadowFloor.visible, toneMapping: renderer ? renderer.toneMapping : 0, shadowCasters: state.model ? state.model.meshes.filter(o => o.castShadow).length : 0 },
       model: {
         status: state.modelStatus,
         name: state.model ? state.model.name : "",
+        label: state.model ? modelLabel() : "",
         error: state.modelError,
         nodes: state.model ? nodeNames(state.model.root) : [],
         parts: state.model ? state.model.parts.length : 0,

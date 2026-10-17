@@ -238,6 +238,87 @@ def test_real_page_loads_glb_model():
         path.unlink(missing_ok=True)
 
 
+def test_pc_cad_has_pbr_materials_and_cylinders(tmp_path):
+    trimesh = pytest.importorskip("trimesh")
+    from core.make_pc_cad import make_pc_cad
+
+    scene = trimesh.load(make_pc_cad(tmp_path))
+    mats = {n: g.visual.material for n, g in scene.geometry.items()}
+    assert mats["case"].metallicFactor == 1.0
+    assert mats["motherboard"].roughnessFactor == pytest.approx(0.2)
+    assert list(mats["ram_1"].baseColorFactor[:3]) == [212, 175, 55]
+    # a fan is a disc (cylinder): its bounding box is square in y/z and thin along x
+    ext = scene.geometry["fan"].extents
+    assert abs(ext[1] - ext[2]) < 1e-6 and ext[0] < ext[1]
+
+
+def test_teaching_sequence_calls_tool_in_order():
+    calls = []
+
+    class _Ui:
+        def __getattr__(self, name):
+            return lambda *a, **k: calls.append((name, a))
+
+    ui = _Ui()
+    for args in ({"mode": "load_model", "model": "cad/pc.glb"}, {"mode": "explode_model", "on": True},
+                 {"mode": "highlight_part", "part": "cpu"}):
+        viewer_3d.viewer_3d(args, player=ui)
+    assert len(calls) >= 3
+
+
+@needs_local_gpu_stack
+def test_real_page_realistic_pbr_teaching_and_generated_label():
+    trimesh = pytest.importorskip("trimesh")
+    from core.make_pc_cad import make_pc_cad
+    from core.viewer3d import MODELS_DIR
+    make_pc_cad()
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+
+    MODELS_DIR.mkdir(exist_ok=True)
+    gen = MODELS_DIR / "image-ferrari-abc123.glb"
+    gen.write_bytes(trimesh.creation.box().export(file_type="glb"))
+    try:
+        app = QApplication.instance() or QApplication(sys.argv)
+        jarvis = ui_module.JarvisUI("")
+        win = jarvis._win
+        viewer_3d.viewer_3d({"mode": "load_model", "model": "cad/pc.glb"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["status"] in ("ready", "error"))
+        assert state["model"]["status"] == "ready", state["model"]
+        viewer_3d.viewer_3d({"mode": "explode_model", "on": True}, player=jarvis)
+        viewer_3d.viewer_3d({"mode": "highlight_part", "part": "cpu"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["explode"] == 1 and s["model"]["glowing"] > 0)
+        assert state["model"]["glowing"] > 0 and state["model"]["highlight"] == "cpu", state["model"]
+
+        viewer_3d.viewer_3d({"mode": "set_material_style", "style": "realistic"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["style"] == "realistic" and s["look"]["shadows"])
+        look = state["look"]
+        assert look["shadows"] and look["shadowFloor"] and look["shadowCasters"] >= 9, look
+        assert look["toneMapping"] != 0, look
+        state = _poll_state(app, win, lambda s: s["look"]["envLoaded"] or s["look"]["envError"], timeout=20)
+        assert state["look"]["envLoaded"] and state["look"]["environment"], state["look"]
+
+        viewer_3d.viewer_3d({"mode": "set_material_style", "style": "blueprint"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["style"] == "blueprint")
+        assert not state["look"]["shadows"] and not state["look"]["environment"], state["look"]
+
+        viewer_3d.viewer_3d({"mode": "load_model", "model": "image-ferrari-abc123.glb"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["name"].startswith("image-ferrari") and s["model"]["status"] == "ready")
+        assert state["model"]["label"] == "Ferrari", state["model"]
+        viewer_3d.viewer_3d({"mode": "spin", "spin": False}, player=jarvis)
+        win._viewer3d.page().runJavaScript(
+            "(() => { const r = document.getElementById('c').getBoundingClientRect();"
+            "document.getElementById('c').dispatchEvent(new MouseEvent('mousemove',"
+            "{clientX: r.left + r.width / 2, clientY: r.top + r.height / 2})); })()"
+        )
+        state = _poll_state(app, win, lambda s: s["model"]["hover"]["name"] != "")
+        assert state["model"]["hover"]["name"] == "Ferrari", state["model"]["hover"]
+        viewer_3d.viewer_3d({"mode": "clear_model"}, player=jarvis)
+    finally:
+        gen.unlink(missing_ok=True)
+
+
 @needs_local_gpu_stack
 def test_real_page_explode_and_highlight():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

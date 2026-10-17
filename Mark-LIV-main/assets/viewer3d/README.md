@@ -11,3 +11,6 @@ npx esbuild <percorso>/src/viewer.js --bundle --minify --format=iife --outfile=<
 ```
 
 API JS esposta come `window.jarvisViewer`: `flyTo(lat, lon)`, `addMarker(lat, lon, label)`, `clearMarkers()`, `spin(on)`, `setMaterialStyle('hologram'|'blueprint'|'realistic')`, `setPartInfo({parte: descrizione})` (tooltip al passaggio del mouse), `getState()`.
+
+
+HDRI `hdr/studio.hdr`: Poly Haven `studio_small_03` 1k, licenza CC0 (usato da `realistic` per riflessi PBR).
