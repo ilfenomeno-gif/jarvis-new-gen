@@ -33,7 +33,9 @@ if _platform.system() == "Windows":
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+import collections
 import logging
+import os
 import re
 import threading
 import time
@@ -83,6 +85,7 @@ from core.action_loader        import discover_actions
 from core.intent_router        import route_tool
 from core.geo_router           import classify_and_route
 from core.prompt_router        import PromptRouter
+from core.tool_router          import ToolRouter
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
 from core                      import audio_devices
@@ -940,6 +943,9 @@ class JarvisLive:
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
         self._last_user_text = ""                  # latest transcript for intent routing
         self._prompt_router = PromptRouter()
+        self._tool_router = ToolRouter()
+        self._recent_user_texts: collections.deque[str] = collections.deque(maxlen=6)
+        self._tools_used: set[str] = set()
         # Native accessibility methods are available immediately, while global
         # hotkeys remain opt-in through start_accessibility_hotkeys().
         self.accessibility = AccessibilityController(speech=self)
@@ -1269,6 +1275,25 @@ class JarvisLive:
         self.ui.write_log(f"ERR: {tool_name} — {short}")
         self.speak(f"Sir, {tool_name} encountered an error. {short}")
 
+    def _select_tool_declarations(self) -> list:
+        """All tool schemas; with JARVIS_TOOL_ROUTING=1 and some context, only the relevant ones.
+
+        The Live API takes the schemas once per (re)connection, so routing can only
+        trim what is sent when the session is (re)built. The first connect has no
+        user text and always gets the full set.
+        """
+        everything = (
+            TOOL_DECLARATIONS
+            + self._action_registry.get_tool_declarations()
+            + self._plugin_registry.get_tool_declarations()
+        )
+        if os.environ.get("JARVIS_TOOL_ROUTING", "0") != "1" or not self._recent_user_texts:
+            return everything
+        selected = self._tool_router.select(" ".join(self._recent_user_texts), everything, self._tools_used)
+        print(f"[JARVIS] 🧭 ToolRouter: {len(selected)}/{len(everything)} tool "
+              f"({len(json.dumps(selected))}/{len(json.dumps(everything))} byte)")
+        return selected
+
     def _build_config(self) -> types.LiveConnectConfig:
         from datetime import datetime
 
@@ -1317,11 +1342,7 @@ class JarvisLive:
             input_audio_transcription={},
             system_instruction="\n".join(parts),
             tools=[{
-                "function_declarations": (
-                    TOOL_DECLARATIONS
-                    + self._action_registry.get_tool_declarations()
-                    + self._plugin_registry.get_tool_declarations()
-                )
+                "function_declarations": self._select_tool_declarations()
             }],
             # Hand back the handle captured from the last session_resumption
             # update. `handle=None` is exactly the old behaviour (ask for
@@ -1901,6 +1922,7 @@ class JarvisLive:
                             full_in = " ".join(in_buf).strip()
                             if full_in:
                                 self._last_user_text = full_in
+                                self._recent_user_texts.append(full_in)
                                 self._schedule_geo_route(full_in)
                                 self.ui.write_log(f"You: {full_in}")
                                 self._session_log.append(f"User: {full_in}")
@@ -1959,6 +1981,7 @@ class JarvisLive:
                         fn_responses = []
                         for fc in response.tool_call.function_calls:
                             print(f"[JARVIS] 📞 {fc.name}")
+                            self._tools_used.add(fc.name)
                             fr = await self._execute_tool(fc)
                             fn_responses.append(fr)
                         await self.session.send_tool_response(

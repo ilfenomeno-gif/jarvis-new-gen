@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 RESULT_PREFIX = "JARVIS_RESULT "
@@ -20,8 +21,19 @@ from core.prompt_3d import build_image_prompt  # noqa: E402
 
 TEXT2IMG_MODEL = os.environ.get("JARVIS_3D_TEXT2IMG", "stabilityai/sd-turbo")
 TRIPOSR_MODEL = os.environ.get("JARVIS_3D_TRIPOSR", "stabilityai/TripoSR")
-# (marching-cubes resolution, chunk size): retried smaller after an out-of-memory
-QUALITY_STEPS = [(256, 8192), (192, 4096), (128, 2048)]
+# (marching-cubes resolution, chunk size): retried smaller after an out-of-memory.
+# 192 is the default: 256 costs far more extraction time for little visible gain on a hologram.
+QUALITY_STEPS = [(192, 4096), (128, 2048)]
+
+
+def half_precision() -> bool:
+    return os.environ.get("JARVIS_3D_HALF", "1") != "0"
+
+
+def lap(stage: str, since: float) -> float:
+    now = time.perf_counter()
+    print("TIMING " + json.dumps({"stage": stage, "seconds": round(now - since, 2)}), flush=True)
+    return now
 
 
 def emit(payload: dict) -> None:
@@ -182,7 +194,8 @@ def _pick_cutout(images, session):
     return best, cuts[best], scores
 
 
-def _image_to_mesh(images, torch):
+def _image_to_mesh(images, torch, use_half: bool = True):
+    began = time.perf_counter()
     _install_marching_cubes_fallback()
     sys.path.insert(0, str(triposr_dir()))
     import numpy as np
@@ -191,11 +204,15 @@ def _image_to_mesh(images, torch):
     from tsr.system import TSR
     from tsr.utils import resize_foreground
 
-    session = rembg.new_session()
+    began = lap("imports", began)
+    # rembg's default (bria-rmbg) takes ~9 s per image on CPU; isnet gives the same cutouts in well under 1 s
+    session = rembg.new_session(os.environ.get("JARVIS_3D_REMBG", "isnet-general-use"))
+    began = lap("rembg_session", began)
     out = debug_dir()
     for number, candidate in enumerate(images):
         candidate.save(out / f"jarvis_3d_debug_candidate{number}.png")
     best, cut, scores = _pick_cutout(images, session)
+    began = lap("cutout_pick", began)
     images[best].save(out / "jarvis_3d_debug.png")
     print("CANDIDATES " + json.dumps({"scores": scores, "chosen": best}), flush=True)
     cut.save(out / "jarvis_3d_debug_cutout.png")
@@ -206,16 +223,26 @@ def _image_to_mesh(images, torch):
     prepared = Image.fromarray((arr * 255.0).astype(np.uint8))
     prepared.save(out / "jarvis_3d_debug_tripo_input.png")
     print("CUTOUT " + json.dumps(stats), flush=True)
+    lap("debug_images", began)
+    started = time.perf_counter()
     model = TSR.from_pretrained(TRIPOSR_MODEL, config_name="config.yaml", weight_name="model.ckpt")
     model.to("cuda")
+    # autocast keeps the weights in fp32 but runs the heavy matmuls in fp16, so float32 inputs still work
+    precision = torch.autocast("cuda", dtype=torch.float16, enabled=use_half)
+    started = lap("triposr_load", started)
     try:
         last_oom = None
         for resolution, chunk in QUALITY_STEPS:
             try:
                 model.renderer.set_chunk_size(chunk)
-                with torch.no_grad():
+                with torch.no_grad(), precision:
                     codes = model([prepared], device="cuda")
-                return model.extract_mesh(codes, True, resolution=resolution)[0]
+                    if use_half and not bool(torch.isfinite(codes).all()):
+                        raise FloatingPointError("half precision produced non-finite triplane codes")
+                    started = lap("triposr_forward", started)
+                    mesh = model.extract_mesh(codes, True, resolution=resolution)[0]
+                lap("marching_cubes", started)
+                return mesh
             except torch.cuda.OutOfMemoryError as exc:
                 last_oom = exc
                 _free(torch)
@@ -240,9 +267,22 @@ def generate(prompt: str, out: Path) -> dict:
     try:
         image_prompt, report = build_image_prompt(prompt)
         print("IMAGE_PROMPT " + json.dumps({"prompt": image_prompt, **report}), flush=True)
+        _free(torch)
+        began = time.perf_counter()
         images = _text_to_images(image_prompt, torch, candidate_count())
-        mesh = _to_gltf_y_up(_image_to_mesh(images, torch))
+        lap("sd_turbo", began)
+        try:
+            mesh = _image_to_mesh(images, torch, half_precision())
+        except FloatingPointError as exc:
+            print("HALF_FALLBACK " + str(exc), flush=True)
+            _free(torch)
+            mesh = _image_to_mesh(images, torch, False)
+        mesh = _to_gltf_y_up(mesh)
+        lap("total", began)
+        exported = time.perf_counter()
         mesh.export(str(out))
+        lap("export", exported)
+        _free(torch)
     except torch.cuda.OutOfMemoryError:
         _free(torch)
         return {"ok": False, "code": "oom", "message": "CUDA out of memory"}

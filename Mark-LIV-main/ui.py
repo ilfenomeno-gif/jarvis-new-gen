@@ -444,6 +444,12 @@ class HudCanvas(QWidget):
         self._base_scale = 1.0    # slow "breathing" target; amp is added per-frame
         self._base_halo  = 55.0
 
+        self._frame = 0
+        try:
+            fps = float(os.environ.get("JARVIS_UI_FPS", "30"))
+        except ValueError:
+            fps = 30.0
+        self._paint_every = 1 if self.reduced_motion else max(1, round(60 / max(1.0, fps)))
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
         self._tmr.start(33 if self.reduced_motion else 17)
@@ -612,7 +618,10 @@ class HudCanvas(QWidget):
         else:
             self._pulses.clear()
             self._particles.clear()
-        self.update()
+        # Logic stays at 60 Hz so motion speed is unchanged; only repaints are capped (default 30 fps).
+        self._frame += 1
+        if self._frame % self._paint_every == 0:
+            self.update()
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -905,11 +914,12 @@ class LogWidget(QTextEdit):
         else:                                                    self._tag = "sys"; icon = "⚙️"
         
         self._text = f"{icon} {self._text}"
-        self._tmr.start(6)
+        self._tmr.start(33)   # 30 Hz: finer ticks only add layout work
 
     def _step(self):
         if self._pos < len(self._text):
-            ch  = self._text[self._pos]
+            # ~60 chars/s for a lone line, more as lines queue up so bursts never lag behind
+            ch  = self._text[self._pos:self._pos + min(200, 2 + 8 * len(self._queue))]
             cur = self.textCursor()
             fmt = cur.charFormat()
             col = {
@@ -924,7 +934,7 @@ class LogWidget(QTextEdit):
             cur.insertText(ch, fmt)
             self.setTextCursor(cur)
             self.ensureCursorVisible()
-            self._pos += 1
+            self._pos += len(ch)
         else:
             self._tmr.stop()
             cur = self.textCursor()

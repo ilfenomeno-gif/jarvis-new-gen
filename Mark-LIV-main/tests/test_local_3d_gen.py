@@ -212,3 +212,14 @@ def test_local_errors_are_reported_verbatim(monkeypatch):
         monkeypatch.setattr(gen, "generate_local", boom)
         out = tool.generate_3d_model({"prompt": "una sedia", "engine": "local"})
         assert out.startswith("3D generation failed (local engine):") and expected in out, out
+
+
+def test_worker_perf_defaults(monkeypatch):
+    from core import local_3d_worker as worker
+    assert worker.QUALITY_STEPS[0][0] == 192
+    monkeypatch.delenv("JARVIS_3D_HALF", raising=False)
+    assert worker.half_precision() is True
+    monkeypatch.setenv("JARVIS_3D_HALF", "0")
+    assert worker.half_precision() is False
+    with open(worker.__file__, encoding="utf-8") as f:
+        assert '"JARVIS_3D_REMBG", "isnet-general-use"' in f.read()
