@@ -5394,7 +5394,10 @@ class MainWindow(QMainWindow):
     def _on_setup_done(self, key: str, os_name: str):
         from core.api_keys import save_gemini_key
         if not save_gemini_key(CONFIG_DIR, key, os_name):
-            self._log.append_log("SYS: Secure storage unavailable, key saved in plain config.")
+            self._log.append_log(
+                "SYS: WARNING - secure storage unavailable: the API key was written "
+                "in PLAIN TEXT to config/api_keys.json. Do not share that file."
+            )
         self._ready = True
         if self._overlay:
             self._overlay.hide()
