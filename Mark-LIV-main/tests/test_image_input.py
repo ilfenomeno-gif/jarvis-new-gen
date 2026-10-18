@@ -130,9 +130,74 @@ class FakePlayer:
         self.calls.append((name, args))
 
 
+def photo_like(path, size=240):
+    """Shaded sphere with sensor noise on a white background: soft gradients like a photograph."""
+    import random
+    rng = random.Random(3)
+    image = Image.new("RGB", (size, size), "white")
+    px = image.load()
+    for y in range(size):
+        for x in range(size):
+            r = ((x - size / 2) ** 2 + (y - size / 2) ** 2) ** 0.5
+            if r < size * 0.35:
+                v = int(255 - r * 2) + rng.randint(-8, 8)
+                px[x, y] = (v, v // 2, 40)
+    image.save(path)
+
+
+def flat_drawing(path, mode="RGB", blur=False):
+    from PIL import ImageDraw
+    image = Image.new(mode, (300, 300), "white" if mode == "RGB" else (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((40, 40, 260, 260), fill=(255, 200, 0), outline=(0, 0, 0), width=5)
+    draw.rectangle((100, 120, 200, 180), fill=(20, 20, 200))
+    if blur:
+        from PIL import ImageFilter
+        image = image.filter(ImageFilter.GaussianBlur(1.0))
+    image.save(path)
+
+
+def test_is_2d_image_tells_drawings_from_photos(tmp_path):
+    flat_drawing(tmp_path / "flat.png")
+    flat_drawing(tmp_path / "cutout.png", mode="RGBA")
+    flat_drawing(tmp_path / "soft.jpg", blur=True)
+    photo_like(tmp_path / "photo.png")
+    assert image_input.is_2d_image(tmp_path / "flat.png")
+    assert image_input.is_2d_image(tmp_path / "cutout.png")
+    assert image_input.is_2d_image(tmp_path / "soft.jpg")
+    assert not image_input.is_2d_image(tmp_path / "photo.png")
+    assert not image_input.is_2d_image(tmp_path / "missing.png")  # never raises
+
+
+def test_photo_cutout_with_alpha_is_not_2d(tmp_path):
+    photo_like(tmp_path / "p.png")
+    image = Image.open(tmp_path / "p.png").convert("RGBA")
+    px = image.load()
+    for y in range(image.height):
+        for x in range(image.width):
+            if px[x, y][:3] == (255, 255, 255):
+                px[x, y] = (255, 255, 255, 0)
+    image.save(tmp_path / "cut.png")
+    assert not image_input.is_2d_image(tmp_path / "cut.png")
+
+
+def test_tool_applies_toon_to_drawings_and_warns(tmp_path, monkeypatch):
+    src = tmp_path / "isagi.png"
+    flat_drawing(src)
+    monkeypatch.setattr(gen, "is_installed", lambda: True)
+    monkeypatch.setattr(gen, "generate_local", lambda prompt, image=None, **_: make_glb(tmp_path / "o.glb") or tmp_path / "o.glb")
+    player = FakePlayer()
+    out = tool.generate_3d_model({"image_path": str(src)}, player=player)
+    assert "Rilevato disegno 2D: applico la modalità Toon per una resa migliore" in out
+    assert player.calls[0] == ("setMaterialStyle", ["toon"])
+    forced = FakePlayer()
+    tool.generate_3d_model({"image_path": str(src), "style": "realistic"}, player=forced)
+    assert forced.calls[0] == ("setMaterialStyle", ["realistic"])
+
+
 def test_tool_image_path_never_contacts_tripo(tmp_path, monkeypatch):
     src = tmp_path / "chair.png"
-    src.write_bytes(png_bytes())
+    photo_like(src)
     seen = {}
 
     def fake_generate_local(prompt, image=None, **_):

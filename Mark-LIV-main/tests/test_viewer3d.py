@@ -321,6 +321,29 @@ def test_real_page_realistic_pbr_teaching_and_generated_label():
 
 
 @needs_local_gpu_stack
+def test_real_page_flat_and_toon_styles():
+    pytest.importorskip("trimesh")
+    from core.make_pc_cad import make_pc_cad
+    make_pc_cad()
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    jarvis = ui_module.JarvisUI("")
+    win = jarvis._win
+    viewer_3d.viewer_3d({"mode": "set_material_style", "style": "toon"}, player=jarvis)
+    viewer_3d.viewer_3d({"mode": "load_model", "model": "cad/pc.glb"}, player=jarvis)
+    state = _poll_state(app, win, lambda s: s["model"]["status"] in ("ready", "error"))
+    assert state["model"]["status"] == "ready" and state["model"]["style"] == "toon", state["model"]
+    assert set(state["model"]["materials"]) == {"MeshToonMaterial"}, state["model"]["materials"]
+    viewer_3d.viewer_3d({"mode": "set_material_style", "style": "flat"}, player=jarvis)
+    state = _poll_state(app, win, lambda s: s["model"]["style"] == "flat")
+    assert set(state["model"]["materials"]) == {"MeshBasicMaterial"}, state["model"]["materials"]
+    viewer_3d.viewer_3d({"mode": "clear_model"}, player=jarvis)
+
+
+@needs_local_gpu_stack
 def test_real_page_explode_and_highlight():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication

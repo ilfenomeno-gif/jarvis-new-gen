@@ -17,7 +17,8 @@ def test_cad_model_names_and_listing(tmp_path):
     (tmp_path / "chair.glb").write_bytes(b"glTF")
     assert model_file("cad/engine.glb", base=tmp_path).name == "engine.glb"
     assert build_call("loadModel", ["cad/engine.glb"]) == ("loadModel", '["cad/engine.glb"]')
-    assert list_models(tmp_path) == {"generated": ["chair.glb"], "cad": ["cad/engine.glb", "cad/pc.glb"]}
+    assert list_models(tmp_path) == {"generated": ["chair.glb"], "cad": ["cad/engine.glb", "cad/pc.glb"],
+                                     "downloads": []}
     for bad in ("cad/../chair.glb", "cad/sub/x.glb", "other/x.glb", "/cad/x.glb", "cad\\x.glb"):
         with pytest.raises(ValueError):
             build_call("loadModel", [bad])

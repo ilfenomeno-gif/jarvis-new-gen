@@ -262,7 +262,7 @@ function holoMaterial() {
 
 const BLUEPRINT_COLOR = 0x0055ff;
 const EDGE_COLOR = 0x00f0ff;
-const STYLES = ["hologram", "blueprint", "realistic"];
+const STYLES = ["hologram", "blueprint", "realistic", "flat", "toon"];
 
 function meshesOf(root) {
   const list = [];
@@ -276,6 +276,29 @@ function blueprintMaterial() {
     // Pushes the faces back so the edge lines do not z-fight with them.
     polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
   });
+}
+
+// Three flat tone bands for the toon look; NearestFilter keeps the steps hard.
+let toonRamp = null;
+function toonGradient() {
+  if (!toonRamp) {
+    toonRamp = new THREE.DataTexture(new Uint8Array([90, 170, 255]), 3, 1, THREE.RedFormat);
+    toonRamp.minFilter = toonRamp.magFilter = THREE.NearestFilter;
+    toonRamp.needsUpdate = true;
+  }
+  return toonRamp;
+}
+
+// 2D artwork: keep the original colours/texture but drop the PBR lighting that dirties them.
+// flat = unlit; toon = cartoon shading. Both keep the model's own map or vertex colours.
+function drawnMaterial(base, style) {
+  const src = [].concat(base)[0];
+  const opts = { color: src.color ? src.color.clone() : new THREE.Color(0xffffff), side: THREE.DoubleSide };
+  if (src.map) opts.map = src.map;
+  if (src.vertexColors) opts.vertexColors = true;
+  if (src.transparent || src.alphaTest) { opts.transparent = src.transparent; opts.alphaTest = src.alphaTest; }
+  if (style === "toon") return new THREE.MeshToonMaterial({ ...opts, gradientMap: toonGradient() });
+  return new THREE.MeshBasicMaterial(opts);
 }
 
 // Callers clear any glow first: this swaps the materials the glow clones from.
@@ -311,6 +334,9 @@ function applyStyle(model, style) {
       );
       o.add(lines);
       o.userData.edgeLines = lines;
+    } else if (style === "flat" || style === "toon") {
+      o.userData.base = o.material;
+      o.material = drawnMaterial(o.material, style);
     }
   });
   model.style = style;
@@ -593,6 +619,7 @@ window.jarvisViewer = {
         hologram: state.model ? state.model.hologram : false,
         style: state.model ? state.model.style : "",
         edges: state.model ? state.model.meshes.filter(o => o.userData.edgeLines).length : 0,
+        materials: state.model ? state.model.meshes.map(o => [].concat(o.material)[0].type) : [],
         meshColors: state.model ? state.model.meshes.map(o => [].concat(o.material)[0].color ? [].concat(o.material)[0].color.getHexString() : "") : [],
         partInfo: Object.keys(state.partInfo).length,
         pendingStyle: state.style,

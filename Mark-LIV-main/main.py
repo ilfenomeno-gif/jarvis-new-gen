@@ -963,6 +963,11 @@ class JarvisLive:
             ),
         )
         _core_names.update(self._action_registry.names())
+        from core import task_runner
+        task_runner.configure(
+            self._action_registry,
+            lambda: {"player": self.ui, "speak": self.speak, "response": None, "session_memory": None},
+        )
         self._plugin_registry = discover_plugins(
             plugins_dir=Path(__file__).resolve().parent / "plugins",
             core_tool_names=_core_names,

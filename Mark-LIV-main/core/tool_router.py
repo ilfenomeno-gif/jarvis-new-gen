@@ -35,8 +35,9 @@ def _group(name: str, keywords: str, tools: Iterable[str], prefixes: tuple = ())
 
 
 GROUPS: tuple[Group, ...] = (
-    _group("3d", r"3d|ologramm|hologram|modell|\bmodel|globo|globe|sedia|chair|esplod|explod|evidenzia|highlight|genera|generate|blueprint|materiale|material|textur|realistic|smonta|spiega|motore|engine|cambio|gearbox|\bpc\b|computer|guardando|che cos.{1,3}\s+quest|what is this|what am i looking|mouse|\bfly\b",
-           {"generate_3d_model", "viewer_3d", "ui_layout"}),
+    _group("3d", r"3d|ologramm|hologram|modell|\bmodel|globo|globe|sedia|chair|esplod|explod|evidenzia|highlight|genera|generate|blueprint|materiale|material|textur|realistic|toon|flat|smonta|spiega|motore|engine|cambio|gearbox|\bpc\b|computer|guardando|che cos.{1,3}\s+quest|what is this|what am i looking|mouse|\bfly\b|cerca|trova|scarica|search|download|\bauto\b|\bcar\b|ferrari|arma|weapon|edificio|building|passo dopo passo|step by step|poi |then ",
+           {"generate_3d_model", "search_3d_model", "viewer_3d", "ui_layout",
+            "task_runner_start", "task_runner_status", "task_runner_cancel", "task_runner_confirm"}),
     _group("flights", r"\bvol[oi]\b|flight|aere[oi]|aircraft|\bplane|aeroport|airport|biglietto|opensky",
            {"flight_finder", "viewer_3d", "gev"}, ("gev_mcp_aircraft", "gev_mcp_find_aircraft", "gev_mcp_get_aircraft")),
     _group("gev", r"\bgev\b|god'?s eye|occhio di dio|satellit|\bnav[ei]\b|vessel|\bship|terremot|earthquake|incendi|\bfire|cicl|cyclon|telecamer|cctv|traffico|traffic|cavi sottomarin|cable|milit|datacenter|\bdig[ah]\b|\bdam\b|situazione|mappa|\bmap\b|lancio|launch|inondaz|flood|elevazione|elevation|quota|imagery|immagini satellitari",

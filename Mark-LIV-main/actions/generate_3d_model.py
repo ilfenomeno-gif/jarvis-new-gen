@@ -59,14 +59,28 @@ def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
     return f"Model '{path.name}' generated and saved."
 
 
-def _show_local(player, params, path) -> str:
+def _show_local(player, params, path, style: str = "blueprint", note: str = "") -> str:
     if player is not None and hasattr(player, "viewer3d_call") and params.get("show", True) is not False:
         # TripoSR textures are blurry: show generated models as a clean solid blueprint.
-        player.viewer3d_call("setMaterialStyle", ["blueprint"])
+        player.viewer3d_call("setMaterialStyle", [style])
         player.viewer3d_call("loadModel", [path.name])
-        return (f"Model '{path.name}' generated from the image and shown in blueprint style (say "
+        return (f"{note}Model '{path.name}' generated from the image and shown in {style} style (say "
                 "'texture originali' for the realistic material). Drag with the mouse to rotate.")
-    return f"Model '{path.name}' generated from the image and saved."
+    return f"{note}Model '{path.name}' generated from the image and saved."
+
+
+_IMAGE_STYLES = ("blueprint", "realistic", "toon", "flat")
+
+
+def _image_style(params: dict, image) -> tuple:
+    """Explicit style wins; otherwise drawings get toon and photographs keep blueprint."""
+    wanted = str(params.get("style") or "").lower()
+    if wanted in _IMAGE_STYLES:
+        return wanted, ""
+    from core import image_input
+    if image_input.is_2d_image(image):
+        return "toon", "Rilevato disegno 2D: applico la modalità Toon per una resa migliore. "
+    return "blueprint", ""
 
 
 def _image_to_3d(params: dict, image_path: str, image_url: str, player) -> str:
@@ -88,6 +102,7 @@ def _image_to_3d(params: dict, image_path: str, image_url: str, player) -> str:
         except ValueError as exc:
             return f"Invalid request: {exc}"
         label = str(params.get("prompt") or "").strip() or image_input.label_for(image_path, image_url)
+        style, note = _image_style(params, image)
         try:
             label = model_gen.clean_prompt(label)
             path = local_3d_gen.generate_local(label, image=image)
@@ -97,7 +112,7 @@ def _image_to_3d(params: dict, image_path: str, image_url: str, player) -> str:
             return f"3D generation failed (local engine): {type(exc).__name__}: {exc}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    return _show_local(player, params, path)
+    return _show_local(player, params, path, style, note)
 
 
 TOOL = {
@@ -117,6 +132,7 @@ TOOL = {
             "prompt": {"type": "STRING", "description": "What to create, ideally in English (the image models understand it best), e.g. 'a wooden chair'. Max 300 characters. With image_path/image_url it is optional (just a name for the model)."},
             "image_path": {"type": "STRING", "description": "Image-to-3D: path of a local picture (png/jpg/webp) to turn into a 3D hologram, skipping the text-to-image step (faster). Local generator only."},
             "image_url": {"type": "STRING", "description": "Image-to-3D: direct http(s) link to a picture (e.g. an image found with web search) to turn into a 3D hologram. Use instead of image_path for web images."},
+            "style": {"type": "STRING", "enum": ["blueprint", "realistic", "toon", "flat"], "description": "Image-to-3D only. Omit it: 2D drawings (anime, logos, comics) are detected automatically and shown in toon, photos in blueprint."},
             "show": {"type": "BOOLEAN", "description": "Show it right away (default true)."},
             "engine": {
                 "type": "STRING",

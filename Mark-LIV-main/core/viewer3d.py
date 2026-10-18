@@ -24,12 +24,13 @@ ALLOWED = {
     "setPartInfo": 1,
     "setControls": 1,
 }
-STYLES = ("hologram", "blueprint", "realistic")
+STYLES = ("hologram", "blueprint", "realistic", "flat", "toon")
 MAX_PART_INFO = 200
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "viewer3d" / "models"
 MAX_MODEL_BYTES = 40 * 1024 * 1024
-_MODEL_NAME = re.compile(r"^(cad/)?[A-Za-z0-9][A-Za-z0-9_\-. ]{0,100}\.(glb|gltf)$")
+_MODEL_NAME = re.compile(r"^((cad|downloads)/)?[A-Za-z0-9][A-Za-z0-9_\-. ]{0,100}\.(glb|gltf)$")
+SUBFOLDERS = ("cad", "downloads")
 
 
 def _ensure_pc_cad(folder: Path) -> None:
@@ -48,7 +49,7 @@ def model_file(name, base: Path | None = None) -> Path:
     if not _MODEL_NAME.match(name) or ".." in name:
         raise ValueError("model must be a .glb/.gltf file name (optionally cad/<name>)")
     path = (base / name).resolve()
-    if path.parent not in (base, base / "cad"):
+    if path.parent not in (base, *(base / sub for sub in SUBFOLDERS)):
         raise ValueError("model must be inside the models folder")
     if not path.is_file() and name == "cad/pc.glb":
         _ensure_pc_cad(base / "cad")
@@ -60,12 +61,13 @@ def model_file(name, base: Path | None = None) -> Path:
 
 
 def list_models(base: Path | None = None) -> dict[str, list[str]]:
-    """Model names available to loadModel: generated ones and pre-downloaded CAD ones."""
+    """Model names available to loadModel: generated, pre-downloaded CAD and web-downloaded ones."""
     base = (base or MODELS_DIR).resolve()
-    out = {"generated": [], "cad": []}
+    out = {"generated": [], "cad": [], "downloads": []}
     if not (base / "cad" / "pc.glb").is_file():
         _ensure_pc_cad(base / "cad")
-    for key, folder, prefix in (("generated", base, ""), ("cad", base / "cad", "cad/")):
+    for key, folder, prefix in (("generated", base, ""), ("cad", base / "cad", "cad/"),
+                                ("downloads", base / "downloads", "downloads/")):
         if folder.is_dir():
             out[key] = sorted(
                 prefix + p.name for p in folder.iterdir()

@@ -39,13 +39,16 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _open(url: str, opener, timeout: float):
+def _open(url: str, opener, timeout: float, accept: str = "image/*"):
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 jarvis-image-to-3d",
-                                                   "Accept": "image/*"})
+                                                   "Accept": accept})
     return opener.open(request, timeout=timeout)
 
 
-def download_image(url, timeout: float = 20.0, opener=None, resolver=_check_public_host) -> bytes:
+def download_image(url, timeout: float = 20.0, opener=None, resolver=_check_public_host,
+                   max_bytes: int | None = None, accept: str = "image/*") -> bytes:
+    """Safe download (public http(s) only, redirects re-checked, size-capped). Also used for .glb files."""
+    limit = max_bytes or MAX_IMAGE_BYTES
     url = str(url or "").strip()
     if len(url) > 2000:
         raise ValueError("image_url is too long")
@@ -56,7 +59,7 @@ def download_image(url, timeout: float = 20.0, opener=None, resolver=_check_publ
             raise ValueError("image_url must be a plain http(s) link")
         resolver(parts.hostname or "")
         try:
-            response = _open(url, opener, timeout)
+            response = _open(url, opener, timeout, accept)
         except urllib.error.HTTPError as exc:
             if exc.code in (301, 302, 303, 307, 308) and exc.headers.get("Location"):
                 url = urllib.parse.urljoin(url, exc.headers["Location"])
@@ -65,9 +68,9 @@ def download_image(url, timeout: float = 20.0, opener=None, resolver=_check_publ
         except (urllib.error.URLError, OSError) as exc:
             raise ValueError(f"download failed: {getattr(exc, 'reason', exc)}") from None
         with response:
-            data = response.read(MAX_IMAGE_BYTES + 1)
-        if len(data) > MAX_IMAGE_BYTES:
-            raise ValueError("the image is too large (max 15 MB)")
+            data = response.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError(f"the file is too large (max {limit} bytes)")
         return data
     raise ValueError("too many redirects")
 
@@ -120,3 +123,55 @@ def prepare_image(image_path, image_url, dest_dir: Path, **kwargs) -> Path:
         raise ValueError("image_path is empty")
     data = read_local_image(image_path) if image_path else download_image(image_url, **kwargs)
     return sanitise_image(data, dest_dir)
+
+
+# Heuristic thresholds, tuned on flat artwork vs photographs (see tests/test_image_input.py).
+_FLAT_TOP_COLOURS = 24
+_FLAT_COVERAGE = 0.85        # share of pixels held by the 24 most common colours
+_FLAT_NEIGHBOURS = 0.85      # share of horizontal neighbours with the same colour
+_ALPHA_COVERAGE = 0.6        # relaxed thresholds when the PNG has real transparency
+_ALPHA_NEIGHBOURS = 0.7
+_TRANSPARENT_SHARE = 0.02
+_MAX_GRADIENT = 0.08         # photographs and shaded renders exceed this share of soft steps
+
+
+def image_2d_stats(path) -> dict:
+    """Numbers behind is_2d_image: colour concentration, flat areas and transparency."""
+    from collections import Counter
+    from PIL import Image
+    with Image.open(path) as source:
+        image = source.convert("RGBA")
+    image.thumbnail((128, 128))
+    width, _ = image.size
+    pixels = list(getattr(image, "get_flattened_data", image.getdata)())
+    transparent = sum(1 for p in pixels if p[3] < 250) / max(1, len(pixels))
+    # 4 bits per channel absorbs JPEG noise without merging real colours.
+    quant = [(p[0] >> 4, p[1] >> 4, p[2] >> 4) for p in pixels if p[3] >= 128]
+    if not quant:
+        return {"coverage": 0.0, "neighbours": 0.0, "gradient": 1.0, "transparent": transparent}
+    coverage = sum(c for _, c in Counter(quant).most_common(_FLAT_TOP_COLOURS)) / len(quant)
+    same = total = soft = 0
+    for i, p in enumerate(pixels[:-1]):
+        if (i + 1) % width == 0 or p[3] < 128 or pixels[i + 1][3] < 128:
+            continue
+        total += 1
+        q = pixels[i + 1]
+        same += (p[0] >> 4, p[1] >> 4, p[2] >> 4) == (q[0] >> 4, q[1] >> 4, q[2] >> 4)
+        # small but non-zero steps are the signature of shading and sensor noise
+        soft += 4 <= max(abs(p[0] - q[0]), abs(p[1] - q[1]), abs(p[2] - q[2])) < 24
+    return {"coverage": coverage, "neighbours": same / max(1, total),
+            "gradient": soft / max(1, total), "transparent": transparent}
+
+
+def is_2d_image(path) -> bool:
+    """True for drawings, logos, comics and anime: flat colours, sharp outlines, few gradients.
+    Photographs (and photo cut-outs on transparency) stay False. Never raises."""
+    try:
+        s = image_2d_stats(path)
+    except Exception:
+        return False
+    if s["gradient"] > _MAX_GRADIENT:
+        return False
+    if s["transparent"] >= _TRANSPARENT_SHARE and s["coverage"] >= _ALPHA_COVERAGE and s["neighbours"] >= _ALPHA_NEIGHBOURS:
+        return True
+    return s["coverage"] >= _FLAT_COVERAGE and s["neighbours"] >= _FLAT_NEIGHBOURS

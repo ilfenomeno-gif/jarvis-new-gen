@@ -41,10 +41,11 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
         if mode == "list_models":
             from core.viewer3d import list_models
             found = list_models()
-            if not (found["generated"] or found["cad"]):
+            if not (found["generated"] or found["cad"] or found["downloads"]):
                 return "No models available. CAD models: run 'python -m core.registry_cli download-cad-models'."
             return (
                 "CAD (multi-part, use these to explain/disassemble): " + (", ".join(found["cad"]) or "none downloaded yet")
+                + ". Downloaded from the web (search_3d_model): " + (", ".join(found["downloads"]) or "none")
                 + ". Generated (single-part): " + (", ".join(found["generated"]) or "none") + "."
             )
         if mode == "hovered_part":
@@ -129,13 +130,16 @@ TOOL = {
         "explode_model (on=true/false) spreads the loaded model's parts apart and "
         "back; highlight_part makes the named part glow (empty part clears it); "
         "set_hologram (on=true/false) toggles the projection look (on by default). "
-        "set_material_style (style=hologram, blueprint or realistic) changes how the "
+        "set_material_style (style=hologram, blueprint, realistic, flat or toon) changes how the "
         "loaded model is drawn: blueprint = solid blue with glowing CAD edges, "
+        "flat/toon = original colours without PBR lighting, for 2D drawings and anime (toon = cartoon shading); "
         "realistic = PBR look (the model's own materials with studio HDRI reflections "
         "and soft shadows); use it for 'show it in blueprint mode'. "
         "Teaching flow ('smonta il PC e spiegami i componenti'): load_model "
         "model=cad/pc.glb, then explode_model, then speak about each part while calling "
-        "highlight_part (cpu, ram_1, gpu, ...) so it glows. "
+        "highlight_part (cpu, ram_1, gpu, ...) so it glows. Highlighting is harmless and "
+        "reversible: do it AUTOMATICALLY while explaining, never ask 'do you want me to "
+        "highlight it?'. Models found with search_3d_model are loaded as 'downloads/<name>.glb'. "
         "list_parts (model=file name) returns the part names; set_part_info "
         "(part_info = JSON text like {\"fan\": \"cools the card\"}) attaches descriptions "
         "to parts: the user then sees a tooltip with the name and description when "
@@ -163,7 +167,7 @@ TOOL = {
             "model": {"type": "STRING", "description": "For load_model: file name such as sword.glb."},
             "on": {"type": "BOOLEAN", "description": "For explode_model: true explodes, false reassembles."},
             "part": {"type": "STRING", "description": "For highlight_part: node name."},
-            "style": {"type": "STRING", "description": "For set_material_style: hologram, blueprint, realistic."},
+            "style": {"type": "STRING", "description": "For set_material_style: hologram, blueprint, realistic, flat (unlit original colours) or toon (cartoon shading, for drawings/anime)."},
             "part_info": {"type": "STRING", "description": "For set_part_info: JSON object text, part name -> description."},
         },
         "required": ["mode"],
