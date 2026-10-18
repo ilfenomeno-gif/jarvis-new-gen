@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import json
 import math
 import os
@@ -21,7 +22,7 @@ else:
 from PyQt6.QtCore import (
     QEasingCurve, QMimeData, QObject, QPointF, QRectF, QSize, Qt,
     QPropertyAnimation,
-    QThread, QTimer, QUrl, pyqtSignal,
+    QThread, QTimer, QUrl, pyqtSignal, pyqtSlot,
 )
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
@@ -37,6 +38,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtTest import QTest
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineScript
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from core.browser_interaction import (
     build_click_link_script, build_keyboard_event_script,
@@ -89,20 +91,20 @@ class _GEVWebEnginePage(QWebEnginePage):
         super().javaScriptConsoleMessage(level, message, line_number, source_id)
 
 
-class _ViewerPage(QWebEnginePage):
-    """Viewer page: relays the hovered part (JS console) to Python."""
+class ViewerBridge(QObject):
+    """QWebChannel object exposed to viewer.js as `bridge` (hover and 3D events)."""
 
-    def __init__(self, parent, hover_handler):
+    hoverChanged = pyqtSignal(str, str)
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._hover_handler = hover_handler
 
-    def javaScriptConsoleMessage(self, level, message, line_number, source_id):
-        from core.viewer3d import parse_hover
-        hover = parse_hover(message)
+    @pyqtSlot(str, str)
+    def onHover(self, name: str, text: str) -> None:
+        from core.viewer3d import sanitize_hover
+        hover = sanitize_hover(name, text)
         if hover is not None:
-            self._hover_handler(hover)
-            return
-        super().javaScriptConsoleMessage(level, message, line_number, source_id)
+            self.hoverChanged.emit(hover["name"], hover["text"])
 
 
 class _SafeBrowserPage(QWebEnginePage):
@@ -308,8 +310,20 @@ class _SysMetrics:
         self._last_net = psutil.net_io_counters()
         self._last_net_t = time.time()
         self._running = True
-        t = threading.Thread(target=self._loop, daemon=True)
-        t.start()
+        self._pynvml = None
+        self._nv_handle = None
+        self._nv_lib = None
+        self._nv_lib_failed = False
+        try:
+            import pynvml  # type: ignore
+            pynvml.nvmlInit()
+            self._nv_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            self._pynvml = pynvml
+        except Exception:
+            self._pynvml = None
+            self._nv_handle = None
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
 
     def _loop(self):
         while self._running:
@@ -318,6 +332,26 @@ class _SysMetrics:
             except Exception:
                 pass
             time.sleep(1.5)
+
+    def close(self):
+        """Stop the sampling thread and release NVML (idempotent)."""
+        self._running = False
+        thread = getattr(self, "_thread", None)
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        if self._pynvml is not None:
+            try:
+                self._pynvml.nvmlShutdown()
+            except Exception:
+                pass
+            self._pynvml = None
+            self._nv_handle = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _update(self):
         cpu = psutil.cpu_percent(interval=None)
@@ -348,19 +382,20 @@ class _SysMetrics:
 
     def _get_gpu(self) -> float:
         # pynvml — subprocess-free, works on all platforms if installed
-        try:
-            import pynvml  # type: ignore
-            pynvml.nvmlInit()
-            h = pynvml.nvmlDeviceGetHandleByIndex(0)
-            return float(pynvml.nvmlDeviceGetUtilizationRates(h).gpu)
-        except Exception:
-            pass
+        if self._pynvml is not None and self._nv_handle is not None:
+            try:
+                return float(self._pynvml.nvmlDeviceGetUtilizationRates(self._nv_handle).gpu)
+            except Exception:
+                pass
 
         # Windows: nvml.dll via ctypes (already cached in _nvml_gpu_windows)
         if _OS == "Windows":
             return _nvml_gpu_windows()
 
-        # Linux / macOS: libnvidia-ml shared lib via ctypes
+        if self._nv_lib_failed:
+            return -1.0
+
+        # Linux / macOS: libnvidia-ml shared lib via ctypes (initialised once)
         try:
             import ctypes
             _lib = "libnvidia-ml.so.1" if _OS == "Linux" else "libnvidia-ml.dylib"
@@ -368,15 +403,16 @@ class _SysMetrics:
             class _Util(ctypes.Structure):
                 _fields_ = [("gpu", ctypes.c_uint), ("memory", ctypes.c_uint)]
 
-            nv = ctypes.CDLL(_lib)
-            nv.nvmlInit_v2()
+            if self._nv_lib is None:
+                self._nv_lib = ctypes.CDLL(_lib)
+                self._nv_lib.nvmlInit_v2()
+            nv = self._nv_lib
             dev = ctypes.c_void_p()
             nv.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(dev))
             u = _Util()
             nv.nvmlDeviceGetUtilizationRates(dev, ctypes.byref(u))
-            return float(u.gpu)
         except Exception:
-            pass
+            self._nv_lib_failed = True
 
         return -1.0   # N/A — zero subprocess on all platforms
 
@@ -419,6 +455,7 @@ class _SysMetrics:
 
 
 _metrics = _SysMetrics()
+atexit.register(_metrics.close)
 
 class HudCanvas(QWidget):
     def __init__(self, face_path: str, assistant_name: str = "J.A.R.V.I.S", parent=None):
@@ -450,8 +487,9 @@ class HudCanvas(QWidget):
         self._blink_tick = 0
         self._particles: list[list[float]] = []
         self._face_px: QPixmap | None = None
+        self._static_px: QPixmap | None = None
+        self._static_key: tuple | None = None
         self._load_face(face_path)
-        
         self._last_step_t = time.monotonic()
 
         # Live audio reactivity: _live_amp is written from the audio threads
@@ -640,16 +678,66 @@ class HudCanvas(QWidget):
         if self._frame % self._paint_every == 0:
             self.update()
 
+    def _rebuild_static_cache(self, W: int, H: int, fw: int, state_color: str, dpr: float) -> None:
+        cx, cy = W / 2, H / 2
+        px = QPixmap(max(1, int(W * dpr)), max(1, int(H * dpr)))
+        px.setDevicePixelRatio(dpr)
+        c = QPainter(px)
+        c.setRenderHint(QPainter.RenderHint.Antialiasing)
+        background = QLinearGradient(0, 0, W, H)
+        background.setColorAt(0.0, qcol(C.BG))
+        background.setColorAt(0.52, qcol(C.DARK))
+        background.setColorAt(1.0, qcol(C.BG))
+        c.fillRect(QRectF(0, 0, W, H), QBrush(background))
+
+        c.setPen(QPen(qcol(C.PRI_GHO), 1))
+        for x in range(0, W, 48):
+            for y in range(0, H, 48):
+                c.drawPoint(x, y)
+
+        t_out, t_in = fw * 0.497, fw * 0.474
+        c.setPen(QPen(qcol(state_color, 140), 1))
+        for deg in range(0, 360, 10):
+            rad = math.radians(deg)
+            inn = t_in if deg % 30 == 0 else t_in + 6
+            c.drawLine(
+                QPointF(cx + t_out * math.cos(rad), cy - t_out * math.sin(rad)),
+                QPointF(cx + inn  * math.cos(rad), cy - inn  * math.sin(rad)),
+            )
+
+        ch_r, gap_h = fw * 0.51, fw * 0.16
+        c.setPen(QPen(qcol(state_color, 40), 1))
+        c.drawLine(QPointF(cx - ch_r, cy), QPointF(cx - gap_h, cy))
+        c.drawLine(QPointF(cx + gap_h, cy), QPointF(cx + ch_r, cy))
+        c.drawLine(QPointF(cx, cy - ch_r), QPointF(cx, cy - gap_h))
+        c.drawLine(QPointF(cx, cy + gap_h), QPointF(cx, cy + ch_r))
+
+        bl = 24
+        hl, hr = cx - fw // 2, cx + fw // 2
+        ht, hb = cy - fw // 2, cy + fw // 2
+        c.setPen(QPen(qcol(state_color, 210), 2))
+        for bx, by, dx, dy in [(hl,ht,1,1),(hr,ht,-1,1),(hl,hb,1,-1),(hr,hb,-1,-1)]:
+            c.drawLine(QPointF(bx, by), QPointF(bx + dx * bl, by))
+            c.drawLine(QPointF(bx, by), QPointF(bx, by + dy * bl))
+        c.end()
+        self._static_px = px
+        self._static_key = (W, H, state_color, dpr)
+
+    def hideEvent(self, e):
+        self._tmr.stop()
+        super().hideEvent(e)
+
+    def showEvent(self, e):
+        if not self._tmr.isActive():
+            self._last_step_t = time.monotonic()
+            self._tmr.start(33 if self.reduced_motion else 17)
+        super().showEvent(e)
+
     def paintEvent(self, _):
         p = QPainter(self)
         if not p.isActive():      # device not ready (e.g. 0-size during layout) — skip cleanly
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        background = QLinearGradient(0, 0, self.width(), self.height())
-        background.setColorAt(0.0, qcol(C.BG))
-        background.setColorAt(0.52, qcol(C.DARK))
-        background.setColorAt(1.0, qcol(C.BG))
-        p.fillRect(self.rect(), QBrush(background))
 
         W, H = self.width(), self.height()
         cx, cy = W / 2, H / 2
@@ -664,22 +752,24 @@ class HudCanvas(QWidget):
             }.get(self.motion_state, C.PRI)
         accent_color = C.MUTED_C if self.muted else state_color
 
-        # grid dots
-        p.setPen(QPen(qcol(C.PRI_GHO), 1))
-        for x in range(0, W, 48):
-            for y in range(0, H, 48):
-                p.drawPoint(x, y)
+        dpr = self.devicePixelRatioF()
+        if self._static_px is None or self._static_key != (W, H, state_color, dpr):
+            self._rebuild_static_cache(W, H, fw, state_color, dpr)
+        p.drawPixmap(0, 0, self._static_px)
 
         r_face = fw * 0.31
 
-        # halo glow
-        for i in range(10):
-            r   = r_face * (1.8 - i * 0.08)
-            frc = 1.0 - i / 10
-            a   = max(0, min(255, int(self._halo * 0.085 * frc)))
-            col = qcol(accent_color, a)
-            p.setPen(QPen(col, 1.5)); p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
+        # halo glow: single radial gradient instead of stacked ellipses
+        halo_r = r_face * 1.8
+        halo_a = max(0, min(255, int(self._halo * 0.85)))
+        glow = QRadialGradient(QPointF(cx, cy), halo_r)
+        glow.setColorAt(0.0, qcol(accent_color, 0))
+        glow.setColorAt(0.55, qcol(accent_color, 0))
+        glow.setColorAt(0.8, qcol(accent_color, halo_a // 3))
+        glow.setColorAt(1.0, qcol(accent_color, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(glow))
+        p.drawEllipse(QRectF(cx - halo_r, cy - halo_r, halo_r * 2, halo_r * 2))
 
         # pulse rings
         for pr in self._pulses:
@@ -714,34 +804,7 @@ class HudCanvas(QWidget):
         p.setPen(QPen(qcol(C.ACC, sa // 2), 1.5))
         p.drawArc(srect, int(self._scan2 * 16), int(ex * 16))
 
-        # tick marks
-        t_out, t_in = fw * 0.497, fw * 0.474
-        p.setPen(QPen(qcol(state_color, 140), 1))
-        for deg in range(0, 360, 10):
-            rad = math.radians(deg)
-            inn = t_in if deg % 30 == 0 else t_in + 6
-            p.drawLine(
-                QPointF(cx + t_out * math.cos(rad), cy - t_out * math.sin(rad)),
-                QPointF(cx + inn  * math.cos(rad), cy - inn  * math.sin(rad)),
-            )
-
-        # crosshair
-        ch_r, gap_h = fw * 0.51, fw * 0.16
-        p.setPen(QPen(qcol(state_color, int(self._halo * 0.5)), 1))
-        p.drawLine(QPointF(cx - ch_r, cy), QPointF(cx - gap_h, cy))
-        p.drawLine(QPointF(cx + gap_h, cy), QPointF(cx + ch_r, cy))
-        p.drawLine(QPointF(cx, cy - ch_r), QPointF(cx, cy - gap_h))
-        p.drawLine(QPointF(cx, cy + gap_h), QPointF(cx, cy + ch_r))
-
-        # corner brackets
-        bl = 24
-        bc = qcol(state_color, 210)
-        hl, hr = cx - fw // 2, cx + fw // 2
-        ht, hb = cy - fw // 2, cy + fw // 2
-        p.setPen(QPen(bc, 2))
-        for bx, by, dx, dy in [(hl,ht,1,1),(hr,ht,-1,1),(hl,hb,1,-1),(hr,hb,-1,-1)]:
-            p.drawLine(QPointF(bx, by), QPointF(bx + dx * bl, by))
-            p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * bl))
+        # tick marks, crosshair and corner brackets live in the static cache
 
         # particles
         for pt in self._particles:
@@ -3195,7 +3258,13 @@ class MainWindow(QMainWindow):
     def _viewer3d_ensure(self):
         if self._viewer3d is None:
             view = QWebEngineView()
-            view.setPage(_ViewerPage(view, self._viewer3d_set_hover))
+            page = QWebEnginePage(view)
+            self._viewer3d_bridge = ViewerBridge(view)
+            self._viewer3d_bridge.hoverChanged.connect(self._viewer3d_set_hover)
+            self._viewer3d_channel = QWebChannel(page)
+            self._viewer3d_channel.registerObject("bridge", self._viewer3d_bridge)
+            page.setWebChannel(self._viewer3d_channel)
+            view.setPage(page)
             # The page is our own local file; it must read models/*.glb beside it.
             view.settings().setAttribute(
                 QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True
@@ -3214,8 +3283,8 @@ class MainWindow(QMainWindow):
 
     _viewer3d_hover_state: dict = {"name": "", "text": ""}
 
-    def _viewer3d_set_hover(self, hover: dict) -> None:
-        self._viewer3d_hover_state = hover
+    def _viewer3d_set_hover(self, name: str, text: str) -> None:
+        self._viewer3d_hover_state = {"name": name, "text": text}
 
     def _viewer3d_on_loaded(self, ok: bool) -> None:
         self._viewer3d_loaded = bool(ok)

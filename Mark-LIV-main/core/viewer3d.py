@@ -108,6 +108,11 @@ def parse_hover(message) -> dict | None:
     if not isinstance(data, dict):
         return None
     name, text = data.get("name", ""), data.get("text", "")
+    return sanitize_hover(name, text)
+
+
+def sanitize_hover(name, text) -> dict | None:
+    """Validate hover fields received from the viewer; None if they are not strings."""
     if not isinstance(name, str) or not isinstance(text, str):
         return None
     return {"name": name.strip()[:60], "text": text.strip()[:300]}

@@ -350,9 +350,13 @@ const pointer = new THREE.Vector2();
 const hover = { x: 0, y: 0, pending: false, last: 0, rays: 0, name: "", text: "" };
 const RAY_INTERVAL_MS = 50;
 
-// The Python side listens to the page console for this prefix (see ui.py).
+// Hover events reach Python through QWebChannel (see ViewerBridge in ui.py).
+let bridge = null;
+if (window.qt && window.qt.webChannelTransport && typeof QWebChannel !== "undefined") {
+  new QWebChannel(window.qt.webChannelTransport, (channel) => { bridge = channel.objects.bridge || null; });
+}
 function emitHover(name, text) {
-  console.info("JARVIS_HOVER " + JSON.stringify({ name, text }));
+  if (bridge) bridge.onHover(String(name), String(text));
 }
 
 function hideTip() {
