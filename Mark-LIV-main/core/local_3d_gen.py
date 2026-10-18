@@ -23,6 +23,8 @@ from core.viewer3d import MAX_MODEL_BYTES, MODELS_DIR
 BASE = Path(__file__).resolve().parent.parent
 TRIPOSR_DIR = Path(os.environ.get("TRIPOSR_DIR") or BASE / "third_party" / "TripoSR")
 TRIPOSR_REPO = "https://github.com/VAST-AI-Research/TripoSR.git"
+SF3D_DIR = Path(os.environ.get("SF3D_DIR") or BASE / "third_party" / "stable-fast-3d")
+SF3D_REPO = "https://github.com/Stability-AI/stable-fast-3d.git"
 MIN_VRAM_GB = 6.0
 DEFAULT_TIMEOUT = 1800.0
 RESULT_PREFIX = "JARVIS_RESULT "
@@ -54,7 +56,7 @@ def is_installed() -> bool:
 
 def _run(cmd: list[str], timeout: float):
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "TRIPOSR_DIR": str(TRIPOSR_DIR)}
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "TRIPOSR_DIR": str(TRIPOSR_DIR), "SF3D_DIR": str(SF3D_DIR)}
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                           timeout=timeout, creationflags=flags, cwd=str(BASE), env=env)
     return proc.returncode, proc.stdout, proc.stderr
@@ -150,17 +152,26 @@ def generate_local(prompt, models_dir: Path | None = None, runner=None,
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def setup() -> str:
-    """Clone the TripoSR sources (MIT) next to the code; torch etc. are pip-installed."""
-    if (TRIPOSR_DIR / "tsr").is_dir():
-        return f"TripoSR already present in {TRIPOSR_DIR}"
-    TRIPOSR_DIR.parent.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(["git", "clone", "--depth", "1", TRIPOSR_REPO, str(TRIPOSR_DIR)],
-                          capture_output=True, text=True)
+def _clone(repo: str, target: Path, marker: str, label: str) -> str:
+    if (target / marker).is_dir():
+        return f"{label} already present in {target}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(["git", "clone", "--depth", "1", repo, str(target)], capture_output=True, text=True)
     if proc.returncode != 0:
-        return "git clone failed: " + (proc.stderr or "").strip()[-300:]
-    return f"TripoSR cloned into {TRIPOSR_DIR}"
+        return f"{label}: git clone failed: " + (proc.stderr or "").strip()[-300:]
+    return f"{label} cloned into {target}"
 
+
+def setup() -> str:
+    """Clone TripoSR (MIT) and Stable Fast 3D next to the code; torch etc. are pip-installed.
+
+    SF3D is optional: its CUDA/C++ extensions (texture_baker, uv_unwrapper) must be built with MSVC
+    (see requirements-3d.txt) and its weights are gated on Hugging Face. Without them the worker uses TripoSR.
+    """
+    return "\n".join([
+        _clone(TRIPOSR_REPO, TRIPOSR_DIR, "tsr", "TripoSR"),
+        _clone(SF3D_REPO, SF3D_DIR, "sf3d", "Stable Fast 3D"),
+    ])
 
 if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else "status"

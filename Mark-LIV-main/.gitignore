@@ -27,3 +27,5 @@ memory/*.json
 Thumbs.db
 desktop.ini
 *.bak
+
+third_party/stable-fast-3d/

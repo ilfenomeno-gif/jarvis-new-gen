@@ -224,3 +224,54 @@ def test_worker_perf_defaults(monkeypatch):
     assert worker.half_precision() is False
     with open(worker.__file__, encoding="utf-8") as f:
         assert '"JARVIS_3D_REMBG", "isnet-general-use"' in f.read()
+
+
+def test_backend_selection_defaults_to_sf3d(monkeypatch):
+    from core import local_3d_worker as worker
+    monkeypatch.delenv("JARVIS_3D_BACKEND", raising=False)
+    assert worker.backend() == "sf3d"
+    monkeypatch.setenv("JARVIS_3D_BACKEND", "TripoSR")
+    assert worker.backend() == "triposr"
+    monkeypatch.setenv("JARVIS_3D_BACKEND", "nonsense")
+    assert worker.backend() == "sf3d"
+
+
+def _stub_backends(monkeypatch, worker, sf3d_error=None):
+    calls = []
+    monkeypatch.setattr(worker, "_cutout_from_images", lambda images: "cut")
+
+    def sf3d(cut, torch):
+        calls.append("sf3d")
+        if sf3d_error:
+            raise sf3d_error
+        return "sf3d-mesh"
+
+    monkeypatch.setattr(worker, "_image_to_mesh_sf3d", sf3d)
+    monkeypatch.setattr(worker, "_cutout_to_triposr_mesh", lambda cut, torch, half: calls.append("triposr") or "tsr-mesh")
+    monkeypatch.setattr(worker, "_free", lambda torch: None)
+    return calls
+
+
+def test_sf3d_is_used_when_it_works(monkeypatch):
+    from core import local_3d_worker as worker
+    monkeypatch.delenv("JARVIS_3D_BACKEND", raising=False)
+    calls = _stub_backends(monkeypatch, worker)
+    assert worker._build_mesh([object()], None, True) == ("sf3d-mesh", "sf3d", True)
+    assert calls == ["sf3d"]
+
+
+def test_sf3d_failure_falls_back_to_triposr(monkeypatch, capsys):
+    from core import local_3d_worker as worker
+    monkeypatch.delenv("JARVIS_3D_BACKEND", raising=False)
+    calls = _stub_backends(monkeypatch, worker, sf3d_error=RuntimeError("gated repo"))
+    assert worker._build_mesh([object()], None, True) == ("tsr-mesh", "triposr", False)
+    assert calls == ["sf3d", "triposr"]
+    assert "BACKEND_FALLBACK" in capsys.readouterr().out
+
+
+def test_triposr_backend_skips_sf3d(monkeypatch):
+    from core import local_3d_worker as worker
+    monkeypatch.setenv("JARVIS_3D_BACKEND", "triposr")
+    calls = _stub_backends(monkeypatch, worker)
+    assert worker._build_mesh([object()], None, True)[1] == "triposr"
+    assert calls == ["triposr"]

@@ -20,3 +20,15 @@ omegaconf>=2.3
 einops>=0.7
 huggingface-hub>=0.23,<1
 scikit-image>=0.22
+
+# --- Stable Fast 3D (opzionale, backend predefinito: JARVIS_3D_BACKEND=sf3d|triposr) ---
+# UV + texture PBR vere. Se manca o fallisce, il worker ripiega da solo su TripoSR.
+#   1. python -m core.local_3d_gen setup     # clona anche third_party/stable-fast-3d
+#   2. pip install jaxtyping open_clip_torch pynanoinstantmeshes gpytoolbox
+#      (NON usare requirements.txt di SF3D: fissa numpy/transformers/torch e romperebbe il venv)
+#   3. Estensioni, da "x64 Native Tools Command Prompt" (MSVC Build Tools 2022, carico "Sviluppo desktop con C++"):
+#        set USE_NATIVE_ARCH=0 && set USE_CUDA=0 && set DISTUTILS_USE_SDK=1
+#        pip install --no-build-isolation third_party\stable-fast-3d\texture_baker third_party\stable-fast-3d\uv_unwrapper
+#      Senza CUDA Toolkit (nvcc) le estensioni sono compilate in C++ su CPU: funziona, non serve il Toolkit.
+#   4. Modello gated: accettare la licenza su https://huggingface.co/stabilityai/stable-fast-3d e fare
+#      "huggingface-cli login" (oppure impostare HF_TOKEN).

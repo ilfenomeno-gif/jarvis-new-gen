@@ -20,6 +20,7 @@ from core.prompt_3d import build_image_prompt  # noqa: E402
 
 TEXT2IMG_MODEL = os.environ.get("JARVIS_3D_TEXT2IMG", "stabilityai/sd-turbo")
 TRIPOSR_MODEL = os.environ.get("JARVIS_3D_TRIPOSR", "stabilityai/TripoSR")
+SF3D_MODEL = os.environ.get("JARVIS_3D_SF3D", "stabilityai/stable-fast-3d")  # gated on Hugging Face (needs a token)
 # (marching-cubes resolution, chunk size): retried smaller after an out-of-memory.
 # 192 is the default: 256 costs far more extraction time for little visible gain on a hologram.
 QUALITY_STEPS = [(192, 4096), (128, 2048)]
@@ -37,6 +38,21 @@ def lap(stage: str, since: float) -> float:
 
 def emit(payload: dict) -> None:
     print(RESULT_PREFIX + json.dumps(payload), flush=True)
+
+
+def backend() -> str:
+    """JARVIS_3D_BACKEND=sf3d|triposr (default sf3d; sf3d falls back to triposr on any failure)."""
+    value = os.environ.get("JARVIS_3D_BACKEND", "sf3d").strip().lower()
+    return value if value in ("sf3d", "triposr") else "sf3d"
+
+
+def sf3d_dir() -> Path:
+    return Path(os.environ.get("SF3D_DIR") or Path(__file__).resolve().parent.parent / "third_party" / "stable-fast-3d")
+
+
+def sf3d_ready() -> bool:
+    import importlib.util
+    return (sf3d_dir() / "sf3d").is_dir() and all(importlib.util.find_spec(m) is not None for m in ("texture_baker", "uv_unwrapper"))
 
 
 def triposr_dir() -> Path:
@@ -58,7 +74,7 @@ def probe() -> dict:
     except ImportError:
         return {"torch": False, "cuda": False, "missing": ["torch"]}
     info = {"torch": True, "torch_version": torch.__version__, "cuda": bool(torch.cuda.is_available()),
-            "missing": _missing_modules()}
+            "missing": _missing_modules(), "backend": backend(), "sf3d_ready": sf3d_ready()}
     if info["cuda"]:
         props = torch.cuda.get_device_properties(0)
         info.update(gpu=props.name, vram_gb=round(props.total_memory / 1024 ** 3, 2))
@@ -197,14 +213,12 @@ def _pick_cutout(images, session):
     return best, cuts[best], scores
 
 
-def _image_to_mesh(images, torch, use_half: bool = True):
+def _cutout_from_images(images):
+    """rembg every candidate and return the best RGBA cutout, framed at 85% (SF3D/TripoSR share this step)."""
     began = time.perf_counter()
     _install_marching_cubes_fallback()
     sys.path.insert(0, str(triposr_dir()))
-    import numpy as np
     import rembg
-    from PIL import Image
-    from tsr.system import TSR
     from tsr.utils import resize_foreground
 
     began = lap("imports", began)
@@ -216,12 +230,45 @@ def _image_to_mesh(images, torch, use_half: bool = True):
         for number, candidate in enumerate(images):
             candidate.save(out / f"jarvis_3d_debug_candidate{number}.png")
     best, cut, scores = _pick_cutout(images, session)
-    began = lap("cutout_pick", began)
+    lap("cutout_pick", began)
     print("CANDIDATES " + json.dumps({"scores": scores, "chosen": best}), flush=True)
     if out:
         images[best].save(out / "jarvis_3d_debug.png")
         cut.save(out / "jarvis_3d_debug_cutout.png")
-    cut = resize_foreground(cut, 0.85)
+    return resize_foreground(cut, 0.85)
+
+
+def _image_to_mesh_sf3d(cut_rgba, torch):
+    """Stable Fast 3D: UV-unwrapped mesh with a baked PBR texture. Input is the RGBA cutout (not grey-composited)."""
+    sys.path.insert(0, str(sf3d_dir()))
+    from sf3d.system import SF3D
+
+    started = time.perf_counter()
+    model = SF3D.from_pretrained(SF3D_MODEL, config_name="config.yaml", weight_name="model.safetensors")
+    try:
+        model.to("cuda")
+        model.eval()
+        started = lap("sf3d_load", started)
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+            mesh, _ = model.run_image([cut_rgba], bake_resolution=int(os.environ.get("JARVIS_3D_TEXTURE", "1024")),
+                                      remesh="none", vertex_count=-1)
+        lap("sf3d_forward", started)
+        return mesh
+    finally:
+        del model
+        _free(torch)
+        torch.cuda.empty_cache()
+
+
+def _cutout_to_triposr_mesh(cut, torch, use_half: bool = True):
+    began = time.perf_counter()
+    import numpy as np
+    from PIL import Image
+    from tsr.system import TSR
+
+    out = debug_dir()
+    if out:
+        cut.save(out / "jarvis_3d_debug_cutout.png")
     arr = np.array(cut).astype(np.float32) / 255.0
     stats = cutout_stats(arr[:, :, 3] * 255.0)
     arr = arr[:, :, :3] * arr[:, :, 3:4] + (1 - arr[:, :, 3:4]) * 0.5
@@ -262,6 +309,19 @@ def _image_to_mesh(images, torch, use_half: bool = True):
         del model
         _free(torch)
 
+def _build_mesh(images, torch, use_half: bool, allow_sf3d: bool = True):
+    """Returns (mesh, backend_used, y_up). SF3D first unless disabled; any SF3D failure falls back to TripoSR."""
+    cut = _cutout_from_images(images)
+    if allow_sf3d and backend() == "sf3d":
+        try:
+            return _image_to_mesh_sf3d(cut, torch), "sf3d", True
+        except Exception as exc:  # gated model, missing token, build problems, OOM...
+            print("BACKEND_FALLBACK " + json.dumps({"from": "sf3d", "to": "triposr",
+                                                    "reason": f"{type(exc).__name__}: {exc}"[:300]}), flush=True)
+            _free(torch)
+    return _cutout_to_triposr_mesh(cut, torch, use_half), "triposr", False
+
+
 def _to_gltf_y_up(mesh):
     """TripoSR meshes are Z-up; glTF/Three.js are Y-up (y' = z, z' = -y)."""
     import numpy as np
@@ -289,12 +349,13 @@ def generate(prompt: str, out: Path, image: Path | None = None) -> dict:
             images = _text_to_images(image_prompt, torch, candidate_count())
             lap("sd_turbo", began)
         try:
-            mesh = _image_to_mesh(images, torch, half_precision())
+            mesh, used, y_up = _build_mesh(images, torch, half_precision())
         except FloatingPointError as exc:
             print("HALF_FALLBACK " + str(exc), flush=True)
             _free(torch)
-            mesh = _image_to_mesh(images, torch, False)
-        mesh = _to_gltf_y_up(mesh)
+            mesh, used, y_up = _build_mesh(images, torch, False, allow_sf3d=False)
+        if not y_up:
+            mesh = _to_gltf_y_up(mesh)
         lap("total", began)
         exported = time.perf_counter()
         tmp = out.with_name(out.name + ".tmp")
@@ -311,7 +372,8 @@ def generate(prompt: str, out: Path, image: Path | None = None) -> dict:
     except Exception as exc:
         return {"ok": False, "code": "error", "message": f"{type(exc).__name__}: {exc}"[:400]}
     return {"ok": True, "path": str(out), "vertices": int(len(mesh.vertices)), "faces": int(len(mesh.faces)),
-            "image_prompt": image_prompt}
+            "image_prompt": image_prompt, "backend": used,
+            "textured": getattr(getattr(mesh, "visual", None), "kind", None) == "texture"}
 
 
 def main(argv=None) -> int:
