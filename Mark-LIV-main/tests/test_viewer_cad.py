@@ -26,13 +26,23 @@ def test_cad_model_names_and_listing(tmp_path):
             model_file(bad, base=tmp_path)
 
 
-def test_parse_hover_accepts_only_wellformed_messages():
-    from core.viewer3d import parse_hover
-    assert parse_hover('JARVIS_HOVER {"name": " fan ", "text": "cools"}') == {"name": "fan", "text": "cools"}
-    assert parse_hover('JARVIS_HOVER {"name": "", "text": ""}') == {"name": "", "text": ""}
-    assert len(parse_hover('JARVIS_HOVER {"name": "%s", "text": ""}' % ("x" * 200))["name"]) == 60
-    for bad in ("hello", "JARVIS_HOVER nope", "JARVIS_HOVER [1]", 'JARVIS_HOVER {"name": 5}', None):
-        assert parse_hover(bad) is None
+def test_sanitize_hover_accepts_only_strings():
+    from core.viewer3d import sanitize_hover
+    assert sanitize_hover(" fan ", "cools") == {"name": "fan", "text": "cools"}
+    assert len(sanitize_hover("x" * 200, "")["name"]) == 60
+    assert sanitize_hover(5, "") is None and sanitize_hover("a", None) is None
+
+
+def test_viewer_navigation_only_allows_local_viewer_folder(tmp_path):
+    from core.viewer3d import is_viewer_url_allowed
+    base = tmp_path / "assets" / "viewer3d"
+    ok = (base / "index.html").as_uri()
+    assert is_viewer_url_allowed(ok, base)
+    assert is_viewer_url_allowed((base / "models" / "a b.glb").as_uri(), base)
+    assert not is_viewer_url_allowed((tmp_path / "secret.txt").as_uri(), base)
+    assert not is_viewer_url_allowed(base.as_uri() + "/../secret.txt", base)
+    assert not is_viewer_url_allowed("https://example.com/", base)
+    assert not is_viewer_url_allowed("javascript:alert(1)", base)
 
 
 class _HoverUi(_Ui):

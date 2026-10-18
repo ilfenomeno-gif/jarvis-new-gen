@@ -7,21 +7,32 @@ changes. Narration stays with the model: the runner only drives tools.
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import threading
+import uuid
+from pathlib import Path
 from typing import Callable
 
 MAX_STEPS = 12
+_RISK_ORDER = {"read": 0, "write": 1, "destructive": 2}
+
+
+def _risk_rank(risk: str) -> int:
+    return _RISK_ORDER.get(risk, 1)  # unknown classes are treated as write
 _FAIL_PREFIXES = ("No ready-made", "Invalid request", "3D generation failed", "Action '", "Tool '")
 _PART_WORDS = {"cpu": "cpu", "processore": "cpu", "ram": "ram", "memoria": "ram", "ventola": "fan",
                "fan": "fan", "scheda madre": "motherboard", "motherboard": "motherboard", "case": "case"}
 
 
 class TaskRunner:
-    def __init__(self, registry, ctx_factory: Callable[[], dict] | None = None, run_async: bool = True):
+    def __init__(self, registry, ctx_factory: Callable[[], dict] | None = None, run_async: bool = True,
+                 checkpoint_path: str | Path | None = None):
         self._registry = registry
         self._ctx = ctx_factory or (lambda: {})
         self._async = run_async
+        self._checkpoint = Path(checkpoint_path) if checkpoint_path else None
         self._lock = threading.RLock()
         self._reset()
 
@@ -30,8 +41,23 @@ class TaskRunner:
         self.steps: list[dict] = []
         self.index = 0
         self.status = "idle"
-        self._cancel = threading.Event()
+        self._run_id: str | None = None
         self._thread: threading.Thread | None = None
+
+    def _save(self) -> None:
+        """Atomically serialise the task so it can be inspected/resumed after a crash."""
+        if self._checkpoint is None:
+            return
+        with self._lock:
+            data = {"run_id": self._run_id, "objective": self.objective, "status": self.status,
+                    "index": self.index, "steps": self.steps}
+            try:
+                self._checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self._checkpoint.with_name(self._checkpoint.name + ".tmp")
+                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+                os.replace(tmp, self._checkpoint)
+            except OSError:
+                pass
 
     # ---- public API -------------------------------------------------
     def start(self, objective: str, steps=None) -> str:
@@ -48,7 +74,10 @@ class TaskRunner:
                         "(a list of {tool, args}) or run the tools one by one.")
             self._reset()
             self.objective, self.steps, self.status = objective, plan, "running"
-        self._go()
+            self._run_id = uuid.uuid4().hex
+            run_id = self._run_id
+            self._save()
+        self._go(run_id)
         return self.status_text()
 
     def confirm(self) -> str:
@@ -57,18 +86,21 @@ class TaskRunner:
                 return "No step is waiting for confirmation."
             self.steps[self.index]["confirmed"] = True
             self.status = "running"
-        self._go()
+            run_id = self._run_id
+            self._save()
+        self._go(run_id)
         return self.status_text()
 
     def cancel(self) -> str:
         with self._lock:
             if self.status not in ("running", "awaiting_confirmation"):
                 return "No active task to cancel."
-            self._cancel.set()
+            self._run_id = None  # invalidates any thread still working on this run
             self.status = "cancelled"
             for step in self.steps[self.index:]:
-                if step["state"] == "pending":
+                if step["state"] in ("pending", "awaiting_confirmation"):
                     step["state"] = "cancelled"
+            self._save()
         return "Task cancelled."
 
     def wait(self, timeout: float = 30.0) -> None:
@@ -99,6 +131,8 @@ class TaskRunner:
             step = self._one(raw)
             if isinstance(raw, dict) and isinstance(raw.get("fallback"), dict):
                 step["fallback"] = self._one(raw["fallback"])
+                # the fallback can run without a second prompt, so gate on the worst case
+                step["risk"] = max(step["risk"], step["fallback"]["risk"], key=_risk_rank)
             out.append(step)
         return out
 
@@ -112,40 +146,48 @@ class TaskRunner:
         return {"tool": tool, "args": dict(args), "risk": self._registry.risk_class(tool),
                 "state": "pending", "result": "", "confirmed": False}
 
-    def _go(self) -> None:
+    def _go(self, run_id: str) -> None:
         if self._async:
-            self._thread = threading.Thread(target=self._loop, name="task-runner", daemon=True)
+            self._thread = threading.Thread(target=self._loop, args=(run_id,), name="task-runner", daemon=True)
             self._thread.start()
         else:
-            self._loop()
+            self._loop(run_id)
 
-    def _loop(self) -> None:
+    def _loop(self, run_id: str) -> None:
         while True:
             with self._lock:
-                if self._cancel.is_set() or self.status != "running":
+                if self._run_id != run_id or self.status != "running":
                     return
                 if self.index >= len(self.steps):
                     self.status = "done"
+                    self._save()
                     return
                 step = self.steps[self.index]
                 if step["risk"] != "read" and not step["confirmed"]:
                     step["state"] = "awaiting_confirmation"
                     self.status = "awaiting_confirmation"
+                    self._save()
                     return
                 step["state"] = "running"
-            self._run_step(step)
+                self._save()
+            self._run_step(step, run_id)
             with self._lock:
-                if self._cancel.is_set():
+                if self._run_id != run_id:
                     return
                 if step["state"] == "failed":
                     self.status = "failed"
+                    self._save()
                     return
                 self.index += 1
+                self._save()
 
-    def _run_step(self, step: dict) -> None:
+    def _run_step(self, step: dict, run_id: str) -> None:
         for candidate in (step, step.get("fallback")):
             if not candidate:
                 continue
+            with self._lock:
+                if self._run_id != run_id:
+                    return
             args = dict(candidate["args"])
             if candidate["risk"] == "destructive":
                 args["confirmed"] = True
@@ -166,7 +208,8 @@ _RUNNER: TaskRunner | None = None
 def configure(registry, ctx_factory: Callable[[], dict] | None = None) -> TaskRunner:
     """Called by main.py once the action registry exists."""
     global _RUNNER
-    _RUNNER = TaskRunner(registry, ctx_factory)
+    _RUNNER = TaskRunner(registry, ctx_factory,
+                         checkpoint_path=Path(__file__).resolve().parent.parent / "config" / "task_checkpoint.json")
     return _RUNNER
 
 

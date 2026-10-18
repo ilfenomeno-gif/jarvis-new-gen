@@ -94,21 +94,24 @@ def part_names(path: Path, limit: int = 60) -> list[str]:
     return names[:limit]
 
 MAX_FLIGHTS = 400
-HOVER_PREFIX = "JARVIS_HOVER "
 
 
-def parse_hover(message) -> dict | None:
-    """Parse a viewer console line 'JARVIS_HOVER {json}'; None if it is not one or is malformed."""
-    if not isinstance(message, str) or not message.startswith(HOVER_PREFIX):
-        return None
+def is_viewer_url_allowed(url: str, viewer_dir) -> bool:
+    """True only for file:// URLs that resolve inside the local viewer3d folder."""
+    from pathlib import Path
+    from urllib.parse import unquote, urlparse
     try:
-        data = json.loads(message[len(HOVER_PREFIX):1000])
-    except ValueError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    name, text = data.get("name", ""), data.get("text", "")
-    return sanitize_hover(name, text)
+        parsed = urlparse(str(url))
+        if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
+            return False
+        path = unquote(parsed.path)
+        if len(path) > 2 and path[0] == "/" and path[2] == ":":
+            path = path[1:]  # /C:/dir -> C:/dir
+        resolved = Path(path).resolve()
+        resolved.relative_to(Path(viewer_dir).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def sanitize_hover(name, text) -> dict | None:

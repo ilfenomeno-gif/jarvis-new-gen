@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 
@@ -54,9 +56,49 @@ keyLight.shadow.mapSize.set(2048, 2048);
 keyLight.shadow.camera.left = -2.2; keyLight.shadow.camera.right = 2.2;
 keyLight.shadow.camera.top = 2.2; keyLight.shadow.camera.bottom = -2.2;
 keyLight.shadow.camera.near = 0.5; keyLight.shadow.camera.far = 12;
+keyLight.shadow.camera.updateProjectionMatrix();
 keyLight.shadow.bias = -0.0005;
 keyLight.shadow.normalBias = 0.02;
 scene.add(keyLight);
+
+const TEXTURE_SLOTS = ["map", "normalMap", "roughnessMap", "metalnessMap", "aoMap", "emissiveMap",
+  "bumpMap", "displacementMap", "alphaMap", "lightMap", "envMap", "specularMap", "gradientMap",
+  "clearcoatMap", "clearcoatNormalMap", "clearcoatRoughnessMap", "sheenColorMap", "sheenRoughnessMap",
+  "transmissionMap", "thicknessMap", "specularIntensityMap", "specularColorMap", "iridescenceMap",
+  "iridescenceThicknessMap", "anisotropyMap"];
+
+function disposeMaterial(m) {
+  if (!m) return;
+  TEXTURE_SLOTS.forEach(k => { if (m[k] && m[k].isTexture) m[k].dispose(); });
+  m.dispose();
+}
+
+// Frees geometries, materials and every texture map of a model (material.dispose() alone keeps textures on the GPU).
+function disposeObject(root) {
+  if (!root) return;
+  root.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    [].concat(o.material || [], (o.userData && o.userData.base) || [], (o.userData && o.userData.orig) || [])
+      .forEach(disposeMaterial);
+  });
+}
+
+// Models may only reference files inside models/ (or embedded data/blob URIs).
+const loadingManager = new THREE.LoadingManager();
+loadingManager.setURLModifier((url) => {
+  if (/^(data|blob):/i.test(url)) return url;
+  const safe = /^models\//.test(url) && !/^[a-z][a-z0-9+.-]*:/i.test(url) && !url.split(/[?#]/)[0].split("/").includes("..");
+  if (!safe) {
+    console.warn("blocked external resource: " + url);
+    return "data:,";
+  }
+  return url;
+});
+const dracoLoader = new DRACOLoader().setDecoderPath("draco/");
+const gltfLoader = new GLTFLoader(loadingManager);
+gltfLoader.setDRACOLoader(dracoLoader);
+gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+let loadToken = 0;
 
 // Invisible floor that only shows the model's shadow.
 const shadowFloor = new THREE.Mesh(
@@ -95,10 +137,12 @@ function syncLook() {
   if (!renderer) return;
   const realistic = !!state.model && state.model.style === "realistic";
   if (realistic) loadEnvironment();
+  // Only dim the stage lights once the HDRI is really there to replace them.
+  const hdriLit = realistic && !!envMap;
   scene.environment = realistic ? envMap : null;
   // The HDRI already lights the model: lower the stage lights so metal does not blow out.
-  hemiLight.intensity = realistic ? 0.15 : 1.6;
-  keyLight.intensity = realistic ? 1.1 : 2.4;
+  hemiLight.intensity = hdriLit ? 0.15 : 1.6;
+  keyLight.intensity = hdriLit ? 1.1 : 2.4;
   scene.environmentIntensity = 0.4;
   const tone = realistic ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
   if (renderer.toneMapping !== tone) {
@@ -514,10 +558,12 @@ window.jarvisViewer = {
   },
   loadModel(name) {
     this.removeModel();
+    const token = ++loadToken;
     state.modelStatus = "loading";
-    new GLTFLoader().load(
+    gltfLoader.load(
       "models/" + name.split("/").map(encodeURIComponent).join("/"),
       (gltf) => {
+        if (token !== loadToken) { disposeObject(gltf.scene); return; }
         const root = gltf.scene;
         const box = new THREE.Box3().setFromObject(root);
         const size = box.getSize(new THREE.Vector3());
@@ -537,7 +583,10 @@ window.jarvisViewer = {
         rings.forEach(r => { r.visible = false; });
       },
       undefined,
-      (err) => { state.modelStatus = "error"; state.modelError = String(err && err.message || err); }
+      (err) => {
+        if (token !== loadToken) return;
+        state.modelStatus = "error"; state.modelError = String(err && err.message || err);
+      }
     );
   },
   explodeModel(on) {
@@ -579,13 +628,10 @@ window.jarvisViewer = {
     state.partInfo = {};
   },
   removeModel() {
+    loadToken++;
     if (state.model) {
       scene.remove(state.model.group);
-      state.model.root.traverse(o => {
-        if (o.geometry) o.geometry.dispose();
-        [].concat(o.material || []).forEach(m => m.dispose());
-        if (o.userData && o.userData.base) [].concat(o.userData.base).forEach(m => m.dispose());
-      });
+      disposeObject(state.model.root);
     }
     state.model = null;
     state.modelStatus = "none";

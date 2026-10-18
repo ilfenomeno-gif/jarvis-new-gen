@@ -11,7 +11,6 @@ import gc
 import json
 import os
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -126,8 +125,12 @@ def _install_marching_cubes_fallback() -> None:
     sys.modules["torchmcubes"] = module
 
 
-def debug_dir() -> Path:
-    path = Path(os.environ.get("JARVIS_3D_DEBUG_DIR") or tempfile.gettempdir())
+def debug_dir() -> Path | None:
+    """Debug images are only written when JARVIS_3D_DEBUG_DIR is set explicitly."""
+    configured = os.environ.get("JARVIS_3D_DEBUG_DIR")
+    if not configured:
+        return None
+    path = Path(configured)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -209,19 +212,22 @@ def _image_to_mesh(images, torch, use_half: bool = True):
     session = rembg.new_session(os.environ.get("JARVIS_3D_REMBG", "isnet-general-use"))
     began = lap("rembg_session", began)
     out = debug_dir()
-    for number, candidate in enumerate(images):
-        candidate.save(out / f"jarvis_3d_debug_candidate{number}.png")
+    if out:
+        for number, candidate in enumerate(images):
+            candidate.save(out / f"jarvis_3d_debug_candidate{number}.png")
     best, cut, scores = _pick_cutout(images, session)
     began = lap("cutout_pick", began)
-    images[best].save(out / "jarvis_3d_debug.png")
     print("CANDIDATES " + json.dumps({"scores": scores, "chosen": best}), flush=True)
-    cut.save(out / "jarvis_3d_debug_cutout.png")
+    if out:
+        images[best].save(out / "jarvis_3d_debug.png")
+        cut.save(out / "jarvis_3d_debug_cutout.png")
     cut = resize_foreground(cut, 0.85)
     arr = np.array(cut).astype(np.float32) / 255.0
     stats = cutout_stats(arr[:, :, 3] * 255.0)
     arr = arr[:, :, :3] * arr[:, :, 3:4] + (1 - arr[:, :, 3:4]) * 0.5
     prepared = Image.fromarray((arr * 255.0).astype(np.uint8))
-    prepared.save(out / "jarvis_3d_debug_tripo_input.png")
+    if out:
+        prepared.save(out / "jarvis_3d_debug_tripo_input.png")
     print("CUTOUT " + json.dumps(stats), flush=True)
     lap("debug_images", began)
     started = time.perf_counter()
@@ -231,26 +237,30 @@ def _image_to_mesh(images, torch, use_half: bool = True):
     precision = torch.autocast("cuda", dtype=torch.float16, enabled=use_half)
     started = lap("triposr_load", started)
     try:
-        last_oom = None
+        # the triplane codes do not depend on the quality step: compute them once
+        with torch.no_grad(), precision:
+            codes = model([prepared], device="cuda")
+            if use_half and not bool(torch.isfinite(codes).all()):
+                raise FloatingPointError("half precision produced non-finite triplane codes")
+        started = lap("triposr_forward", started)
+        # keep only a flag: holding the exception would pin its traceback (and the tensors) alive
+        ran_out_of_memory = False
         for resolution, chunk in QUALITY_STEPS:
+            ran_out_of_memory = False
             try:
                 model.renderer.set_chunk_size(chunk)
                 with torch.no_grad(), precision:
-                    codes = model([prepared], device="cuda")
-                    if use_half and not bool(torch.isfinite(codes).all()):
-                        raise FloatingPointError("half precision produced non-finite triplane codes")
-                    started = lap("triposr_forward", started)
                     mesh = model.extract_mesh(codes, True, resolution=resolution)[0]
                 lap("marching_cubes", started)
                 return mesh
-            except torch.cuda.OutOfMemoryError as exc:
-                last_oom = exc
+            except torch.cuda.OutOfMemoryError:
+                ran_out_of_memory = True
+            if ran_out_of_memory:
                 _free(torch)
-        raise last_oom
+        raise torch.cuda.OutOfMemoryError("CUDA out of memory during mesh extraction")
     finally:
         del model
         _free(torch)
-
 
 def _to_gltf_y_up(mesh):
     """TripoSR meshes are Z-up; glTF/Three.js are Y-up (y' = z, z' = -y)."""
@@ -287,7 +297,12 @@ def generate(prompt: str, out: Path, image: Path | None = None) -> dict:
         mesh = _to_gltf_y_up(mesh)
         lap("total", began)
         exported = time.perf_counter()
-        mesh.export(str(out))
+        tmp = out.with_name(out.name + ".tmp")
+        try:
+            mesh.export(str(tmp), file_type="glb")
+            os.replace(tmp, out)
+        finally:
+            tmp.unlink(missing_ok=True)
         lap("export", exported)
         _free(torch)
     except torch.cuda.OutOfMemoryError:

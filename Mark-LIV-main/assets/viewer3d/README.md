@@ -7,10 +7,12 @@ Rigenerare il bundle (richiede Node), da una cartella temporanea:
 ```
 npm i three@0.186.1 esbuild
 set NODE_PATH=<cartella temporanea>\node_modules
-npx esbuild <percorso>/src/viewer.js --bundle --minify --format=iife --outfile=<percorso>/viewer.bundle.js
+npx esbuild <percorso>/src/viewer.js --bundle --minify --format=iife "--define:import.meta.url=\"file:///three/examples/jsm/loaders/\"" --outfile=<percorso>/viewer.bundle.js
 ```
 
 API JS esposta come `window.jarvisViewer`: `flyTo(lat, lon)`, `addMarker(lat, lon, label)`, `clearMarkers()`, `spin(on)`, `setMaterialStyle('hologram'|'blueprint'|'realistic')`, `setPartInfo({parte: descrizione})` (tooltip al passaggio del mouse), `getState()`.
 
 
 HDRI `hdr/studio.hdr`: Poly Haven `studio_small_03` 1k, licenza CC0 (usato da `realistic` per riflessi PBR).
+
+Decoder Draco (Apache-2.0) in draco/, copiati da 	hree/examples/jsm/libs/draco/gltf/; il decoder Meshopt è incluso nel bundle. Il viewer carica solo risorse locali sotto models/ (URL esterni bloccati).

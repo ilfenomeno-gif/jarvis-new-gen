@@ -91,6 +91,16 @@ class _GEVWebEnginePage(QWebEnginePage):
         super().javaScriptConsoleMessage(level, message, line_number, source_id)
 
 
+class _ViewerPage(QWebEnginePage):
+    """Viewer page: navigation is limited to the local assets/viewer3d folder."""
+
+    def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
+        from core.viewer3d import is_viewer_url_allowed
+        if not is_viewer_url_allowed(url.toString(), BASE_DIR / "assets" / "viewer3d"):
+            return False
+        return super().acceptNavigationRequest(url, navigation_type, is_main_frame)
+
+
 class ViewerBridge(QObject):
     """QWebChannel object exposed to viewer.js as `bridge` (hover and 3D events)."""
 
@@ -411,6 +421,7 @@ class _SysMetrics:
             nv.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(dev))
             u = _Util()
             nv.nvmlDeviceGetUtilizationRates(dev, ctypes.byref(u))
+            return float(u.gpu)
         except Exception:
             self._nv_lib_failed = True
 
@@ -721,7 +732,7 @@ class HudCanvas(QWidget):
             c.drawLine(QPointF(bx, by), QPointF(bx, by + dy * bl))
         c.end()
         self._static_px = px
-        self._static_key = (W, H, state_color, dpr)
+        self._static_key = (W, H, state_color, dpr, C.BG, C.DARK, C.PRI_GHO)
 
     def hideEvent(self, e):
         self._tmr.stop()
@@ -753,7 +764,8 @@ class HudCanvas(QWidget):
         accent_color = C.MUTED_C if self.muted else state_color
 
         dpr = self.devicePixelRatioF()
-        if self._static_px is None or self._static_key != (W, H, state_color, dpr):
+        key = (W, H, state_color, dpr, C.BG, C.DARK, C.PRI_GHO)
+        if self._static_px is None or self._static_key != key:
             self._rebuild_static_cache(W, H, fw, state_color, dpr)
         p.drawPixmap(0, 0, self._static_px)
 
@@ -3258,7 +3270,7 @@ class MainWindow(QMainWindow):
     def _viewer3d_ensure(self):
         if self._viewer3d is None:
             view = QWebEngineView()
-            page = QWebEnginePage(view)
+            page = _ViewerPage(view)
             self._viewer3d_bridge = ViewerBridge(view)
             self._viewer3d_bridge.hoverChanged.connect(self._viewer3d_set_hover)
             self._viewer3d_channel = QWebChannel(page)

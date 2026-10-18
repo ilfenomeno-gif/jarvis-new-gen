@@ -92,3 +92,44 @@ def test_action_files_expose_the_four_tools():
     names = discover_actions(Path(__file__).resolve().parent.parent / "actions", logger=lambda m: None).names()
     assert {"search_3d_model", "task_runner_start", "task_runner_status",
             "task_runner_cancel", "task_runner_confirm"} <= names
+
+
+def test_read_step_with_write_fallback_requires_confirmation():
+    log = []
+    r = runner(log, fail=("viewer_3d",))
+    r.start("x", [{"tool": "viewer_3d", "args": {"mode": "load_model"},
+                   "fallback": {"tool": "generate_3d_model", "args": {"prompt": "a"}}}])
+    assert r.status == "awaiting_confirmation" and log == []
+    r.confirm()
+    assert [c[0] for c in log] == ["viewer_3d", "generate_3d_model"]
+
+
+def test_cancelled_thread_cannot_touch_new_run():
+    import threading
+    log, gate = [], threading.Event()
+    reg = make_registry(log)
+    slow = reg._actions["viewer_3d"].handler
+
+    def blocking(parameters, **kw):
+        gate.wait(5)
+        return slow(parameters, **kw)
+
+    reg._actions["viewer_3d"].handler = blocking
+    r = TaskRunner(reg)
+    r.start("a", [{"tool": "viewer_3d", "args": {"mode": "one"}}, {"tool": "viewer_3d", "args": {"mode": "two"}}])
+    old = r._thread
+    r.cancel()
+    r.start("b", [{"tool": "search_3d_model", "args": {"query": "q"}}])
+    gate.set()
+    old.join(5)
+    assert r.objective == "b" and r.status == "awaiting_confirmation" and r.index == 0
+    assert [c[1].get("mode") for c in log] == ["one"]
+
+
+def test_checkpoint_is_written(tmp_path):
+    import json
+    path = tmp_path / "cp.json"
+    r = TaskRunner(make_registry([]), run_async=False, checkpoint_path=path)
+    r.start("Smonta il PC e spiegami la RAM")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["status"] == "done" and len(data["steps"]) == 3 and data["run_id"]
