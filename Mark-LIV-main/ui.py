@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import math
 import os
 import platform
@@ -51,6 +52,7 @@ from core.ui_panels import (
 )
 from core.page_reader import PageSpeechWorker, build_page_read_script
 from core.browser_url import is_allowed_http_scheme, normalize_http_url
+from core.hud_animator import HudAnimator, STATE_NAMES
 from gemini_chat_window import GeminiChatPanel, GeminiChatWindow
 
 _GEV_URL = "http://127.0.0.1:4173/?ui=panels"
@@ -76,9 +78,7 @@ _GEV_FOLLOW_KINDS = {
     "satellite": "satellite",
 }
 _GEV_MAX_SAFE_JS_INTEGER = 2**53 - 1
-_JARVIS_VISUAL_STATES = frozenset(
-    {"idle", "listening", "thinking", "speaking", "error"}
-)
+_JARVIS_VISUAL_STATES = STATE_NAMES
 
 
 class _GEVWebEnginePage(QWebEnginePage):
@@ -486,6 +486,8 @@ _metrics = _SysMetrics()
 atexit.register(_metrics.close)
 
 class HudCanvas(QWidget):
+    animationChanged = pyqtSignal(object)
+
     def __init__(self, face_path: str, assistant_name: str = "J.A.R.V.I.S", parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
@@ -496,6 +498,8 @@ class HudCanvas(QWidget):
         self.speaking = False
         self.state    = "INITIALISING"
         self.motion_state = "idle"
+        self._hud_animator = HudAnimator()
+        self._animation_values = self._hud_animator.update(_allow_reload=False)
         self.reduced_motion = os.environ.get("JARVIS_REDUCED_MOTION") == "1"
         self._error_started: float | None = None
         self._error_flash = 0.0
@@ -544,12 +548,29 @@ class HudCanvas(QWidget):
         normalized = state.strip().lower()
         if normalized not in _JARVIS_VISUAL_STATES:
             raise ValueError(f"Unsupported JARVIS visual state: {state}")
+        target = self._hud_animator.set_state(normalized)
         if normalized == "error" or normalized != self.motion_state:
             self._error_started = (
                 time.monotonic() if normalized == "error" else None
             )
             self._error_flash = 0.0
         self.motion_state = normalized
+        self.animationChanged.emit(target)
+
+    def animation_snapshot(self) -> dict:
+        return self._hud_animator.target_snapshot()
+
+    def poll_hud_reload(self) -> bool:
+        try:
+            reloaded = self._hud_animator.poll_reload()
+        except (OSError, ValueError) as exc:
+            logging.getLogger(__name__).error("HUD configuration reload failed: %s", exc)
+            return False
+        if reloaded:
+            self._animation_values = self._hud_animator.update(_allow_reload=False)
+            self.animationChanged.emit(self.animation_snapshot())
+            self.update()
+        return reloaded
 
     def stop_animations(self) -> None:
         self._tmr.stop()
@@ -603,6 +624,9 @@ class HudCanvas(QWidget):
         if not self.reduced_motion:
             self._tick += 1
         now = time.monotonic()
+        self._animation_values = self._hud_animator.update(now, _allow_reload=False)
+        ring_speed = self._animation_values["ring_speed"]
+        glow_intensity = self._animation_values["glow_intensity"]
 
         # ── Live audio reactivity ────────────────────────────────────────────
         # Audio threads push peaks into _live_amp; decay it toward silence so
@@ -635,10 +659,10 @@ class HudCanvas(QWidget):
             self._tgt_scale, self._tgt_halo = self._base_scale, self._base_halo
         elif self.speaking:
             self._tgt_scale = self._base_scale + amp * 0.13
-            self._tgt_halo  = self._base_halo  + amp * 95.0
+            self._tgt_halo  = (self._base_halo + amp * 95.0) * glow_intensity
         else:
             self._tgt_scale = self._base_scale + amp * 0.06
-            self._tgt_halo  = self._base_halo  + amp * 75.0
+            self._tgt_halo  = (self._base_halo + amp * 75.0) * glow_intensity
         if self.motion_state == "error":
             elapsed = now - (self._error_started or now)
             self._error_flash = (
@@ -646,7 +670,9 @@ class HudCanvas(QWidget):
                 if elapsed < 0.8 and not self.reduced_motion
                 else 0.0
             )
-            self._tgt_halo = self._base_halo + 45.0 * self._error_flash
+            self._tgt_halo = (
+                self._base_halo + 45.0 * self._error_flash
+            ) * glow_intensity
 
         sp = 0.38 if self.speaking else (0.30 if amp > 0.02 else 0.15)
         self._scale += (self._tgt_scale - self._scale) * sp
@@ -661,18 +687,18 @@ class HudCanvas(QWidget):
             else:
                 speeds = [0.55, -0.35, 0.9]
             for i, speed in enumerate(speeds):
-                self._rings[i] = (self._rings[i] + speed * boost) % 360
+                self._rings[i] = (self._rings[i] + speed * ring_speed * boost) % 360
 
             self._scan = (
-                self._scan + (3.0 if self.speaking else 1.3) * boost
+                self._scan + (3.0 if self.speaking else 1.3) * ring_speed * boost
             ) % 360
             self._scan2 = (
-                self._scan2 + (-2.0 if self.speaking else -0.75) * boost
+                self._scan2 + (-2.0 if self.speaking else -0.75) * ring_speed * boost
             ) % 360
 
             fw = min(self.width(), self.height())
             lim = fw * 0.74
-            pulse_speed = 4.2 if self.speaking else 2.0
+            pulse_speed = (4.2 if self.speaking else 2.0) * ring_speed
             self._pulses = [
                 radius + pulse_speed
                 for radius in self._pulses
@@ -683,17 +709,23 @@ class HudCanvas(QWidget):
             ):
                 self._pulses.append(0.0)
 
-            if self.speaking and random.random() < 0.28:
+            max_particles = int(self._animation_values["particle_count"])
+            spawn_chance = min(0.9, max_particles / 24)
+            spawn_count = max(1, math.ceil(max_particles / 24))
+            if max_particles and random.random() < spawn_chance:
                 cx, cy = self.width() / 2, self.height() / 2
-                angle = random.uniform(0, 2 * math.pi)
-                start_radius = fw * 0.28
-                self._particles.append([
-                    cx + math.cos(angle) * start_radius,
-                    cy + math.sin(angle) * start_radius,
-                    math.cos(angle) * random.uniform(0.9, 2.4),
-                    math.sin(angle) * random.uniform(0.9, 2.4) - 0.4,
-                    1.0,
-                ])
+                for _ in range(spawn_count):
+                    if len(self._particles) >= max_particles:
+                        break
+                    angle = random.uniform(0, 2 * math.pi)
+                    start_radius = fw * 0.28
+                    self._particles.append([
+                        cx + math.cos(angle) * start_radius,
+                        cy + math.sin(angle) * start_radius,
+                        math.cos(angle) * random.uniform(0.9, 2.4),
+                        math.sin(angle) * random.uniform(0.9, 2.4) - 0.4,
+                        1.0,
+                    ])
             self._particles = [
                 [
                     particle[0] + particle[2],
@@ -705,6 +737,7 @@ class HudCanvas(QWidget):
                 for particle in self._particles
                 if particle[4] > 0
             ]
+            self._particles = self._particles[:max_particles]
 
             self._blink_tick += 1
             if self._blink_tick >= 38:
@@ -782,20 +815,14 @@ class HudCanvas(QWidget):
         W, H = self.width(), self.height()
         cx, cy = W / 2, H / 2
         fw = min(W, H)
-        if self.motion_state == "error":
-            state_color = C.ACC if self._error_flash > 0.7 else C.RED
-        else:
-            state_color = {
-                "listening": C.GREEN,
-                "thinking": C.ACC2,
-                "speaking": C.ACC,
-            }.get(self.motion_state, C.PRI)
+        state_color = self._animation_values["core_color"]
+        static_state_color = self._animation_values["target_core_color"]
         accent_color = C.MUTED_C if self.muted else state_color
 
         dpr = self.devicePixelRatioF()
-        key = (W, H, state_color, dpr, C.BG, C.DARK, C.PRI_GHO)
+        key = (W, H, static_state_color, dpr, C.BG, C.DARK, C.PRI_GHO)
         if self._static_px is None or self._static_key != key:
-            self._rebuild_static_cache(W, H, fw, state_color, dpr)
+            self._rebuild_static_cache(W, H, fw, static_state_color, dpr)
         p.drawPixmap(0, 0, self._static_px)
 
         r_face = fw * 0.31
@@ -842,7 +869,7 @@ class HudCanvas(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
         srect = QRectF(cx - sr, cy - sr, sr * 2, sr * 2)
         p.drawArc(srect, int(self._scan * 16), int(ex * 16))
-        p.setPen(QPen(qcol(C.ACC, sa // 2), 1.5))
+        p.setPen(QPen(qcol(accent_color, sa // 2), 1.5))
         p.drawArc(srect, int(self._scan2 * 16), int(ex * 16))
 
         self._draw_quantum_blueprint(p, W, H, cx, cy, fw, state_color)
@@ -853,7 +880,7 @@ class HudCanvas(QWidget):
         for pt in self._particles:
             a = max(0, min(255, int(pt[4] * 255)))
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(qcol(C.PRI, a)))
+            p.setBrush(QBrush(qcol(accent_color, a)))
             p.drawEllipse(QPointF(pt[0], pt[1]), 2.5, 2.5)
 
         # status text
@@ -861,20 +888,23 @@ class HudCanvas(QWidget):
         if self.muted:
             txt, col = "⊘  MUTED",     qcol(C.MUTED_C)
         elif self.speaking:
-            txt, col = "●  SPEAKING",  qcol(C.ACC)
+            txt, col = "●  SPEAKING",  qcol(state_color)
         elif self.motion_state == "error":
             txt, col = "⚠  ERROR", qcol(state_color)
         elif self.state == "PROCESSING":
             sym = "▷" if self._blink else "▶"
-            txt, col = f"{sym}  PROCESSING", qcol(C.ACC2)
+            txt, col = f"{sym}  PROCESSING", qcol(state_color)
+        elif self.motion_state == "generating_3d":
+            sym = "◌" if self._blink else "◍"
+            txt, col = f"{sym}  GENERATING 3D", qcol(state_color)
         elif self.motion_state == "thinking":
             sym = "◈" if self._blink else "◇"
-            txt, col = f"{sym}  THINKING",   qcol(C.ACC2)
+            txt, col = f"{sym}  THINKING",   qcol(state_color)
         elif self.motion_state == "listening":
             sym = "●" if self._blink else "○"
-            txt, col = f"{sym}  LISTENING",  qcol(C.GREEN)
+            txt, col = f"{sym}  LISTENING",  qcol(state_color)
         elif self.motion_state == "speaking":
-            txt, col = "●  SPEAKING", qcol(C.ACC)
+            txt, col = "●  SPEAKING", qcol(state_color)
         else:
             sym = "●" if self._blink else "○"
             txt, col = f"{sym}  {self.state}", qcol(state_color)
@@ -905,7 +935,15 @@ class HudCanvas(QWidget):
                 env     = (1.0 - abs(i - mid) / mid) ** 0.7      # center-weighted hump
                 shimmer = 0.55 + 0.45 * math.sin(self._tick * 0.18 + i * 0.7)
                 idle    = 3.0 + 2.0 * math.sin(self._tick * 0.09 + i * 0.6)
-                hgt     = int(max(2, min(24, idle + amp * 22.0 * env * shimmer)))
+                hgt     = int(max(
+                    2,
+                    min(
+                        24,
+                        idle
+                        + amp * 22.0 * env * shimmer
+                        * self._animation_values["waveform_amplitude"],
+                    ),
+                ))
                 if amp > 0.05:
                     cl = qcol(state_color) if hgt > 12 else qcol(C.PRI_DIM)
                 else:
@@ -940,7 +978,7 @@ class HudCanvas(QWidget):
             self._projection_status,
         )
 
-        p.setPen(QPen(qcol(C.PRI, 130), 1, Qt.PenStyle.DashLine))
+        p.setPen(QPen(qcol(state_color, 130), 1, Qt.PenStyle.DashLine))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawLine(QPointF(cx - cylinder_w / 2, top_y), QPointF(cx - cylinder_w / 2, top_y + cylinder_h))
         p.drawLine(QPointF(cx + cylinder_w / 2, top_y), QPointF(cx + cylinder_w / 2, top_y + cylinder_h))
@@ -958,26 +996,25 @@ class HudCanvas(QWidget):
 
         glow = QRadialGradient(QPointF(cx, core_y), radius * 1.2)
         glow.setColorAt(0, qcol(state_color, 38))
-        glow.setColorAt(0.72, qcol(C.PRI, 16))
-        glow.setColorAt(1, qcol(C.PRI, 0))
+        glow.setColorAt(0.72, qcol(state_color, 16))
+        glow.setColorAt(1, qcol(state_color, 0))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(glow))
         p.drawEllipse(QRectF(cx - radius * 1.2, core_y - radius * 1.2,
                              radius * 2.4, radius * 2.4))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(qcol(C.PRI, 210), 1.2))
+        p.setPen(QPen(qcol(state_color, 210), 1.2))
         p.drawEllipse(QRectF(cx - radius, core_y - radius, radius * 2, radius * 2))
         for latitude in (-0.62, -0.32, 0, 0.32, 0.62):
             half_width = radius * math.sqrt(1 - latitude * latitude)
             ellipse_h = max(2.0, radius * (0.19 if latitude else 0.28))
-            color = C.ACC if latitude == 0 else C.PRI
-            p.setPen(QPen(qcol(color, 185 if latitude == 0 else 110), 1))
+            p.setPen(QPen(qcol(state_color, 185 if latitude == 0 else 110), 1))
             p.drawEllipse(QRectF(
                 cx - half_width, core_y + radius * latitude - ellipse_h / 2,
                 half_width * 2, ellipse_h,
             ))
         for longitude in (0.42, 0.72, 1.0):
-            p.setPen(QPen(qcol(C.PRI, 120), 1))
+            p.setPen(QPen(qcol(state_color, 120), 1))
             p.drawEllipse(QRectF(
                 cx - radius * longitude, core_y - radius,
                 radius * 2 * longitude, radius * 2,
@@ -985,9 +1022,9 @@ class HudCanvas(QWidget):
 
         pad_y = core_y + radius * 1.55
         pad_w = fw * 0.29
-        p.setPen(QPen(qcol(C.PRI, 180), 1))
+        p.setPen(QPen(qcol(state_color, 180), 1))
         p.drawEllipse(QRectF(cx - pad_w / 2, pad_y - fw * 0.025, pad_w, fw * 0.05))
-        p.setPen(QPen(qcol(C.ACC, 145), 1))
+        p.setPen(QPen(qcol(state_color, 145), 1))
         p.drawEllipse(QRectF(cx - pad_w * 0.34, pad_y - fw * 0.014,
                              pad_w * 0.68, fw * 0.028))
         p.drawLine(
@@ -1018,10 +1055,13 @@ class HudCanvas(QWidget):
         p.drawLine(QPointF(12, side_y + 13), QPointF(cx - radius, core_y - radius * 0.45))
         wave_x = 12.0
         wave_y = side_y + 22
-        wave_color = C.GREEN if self.motion_state == "listening" else C.PRI
+        wave_color = self._animation_values["core_color"]
         for index in range(12):
             envelope = 0.4 + 0.6 * math.sin(index * 0.58 + self._tick * 0.12)
-            bar_h = 2 + int(envelope * (3 + self._amp_disp * 9))
+            bar_h = 2 + int(
+                envelope
+                * (3 + self._amp_disp * 9 * self._animation_values["waveform_amplitude"])
+            )
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(qcol(wave_color, 185 if self._amp_disp > 0.02 else 90)))
             p.drawRect(QRectF(wave_x + index * 5, wave_y - bar_h / 2, 3, bar_h))
@@ -3231,6 +3271,11 @@ class MainWindow(QMainWindow):
 
         self._log_sig.connect(self._on_log_message)
         self._state_sig.connect(self._apply_state)
+        self.hud.animationChanged.connect(self._viewer3d_set_hud_state)
+        self._hud_reload_timer = QTimer(self)
+        self._hud_reload_timer.setInterval(250)
+        self._hud_reload_timer.timeout.connect(self.hud.poll_hud_reload)
+        self._hud_reload_timer.start()
         self._content_sig.connect(self._show_content)
         self._content_hide_sig.connect(self._hide_content_if)
         self._widget_sig.connect(self._on_widget)
@@ -3563,6 +3608,21 @@ class MainWindow(QMainWindow):
             if shot:
                 shot["event"].set()
 
+    def _viewer3d_set_hud_state(self, snapshot: dict) -> None:
+        if self._viewer3d is None:
+            return
+        self.viewer3d_call(
+            "setHudState",
+            [
+                snapshot["state"],
+                snapshot["core_color"],
+                snapshot["ring_speed"],
+                snapshot["glow_intensity"],
+                snapshot["particle_count"],
+                snapshot["transition_seconds"],
+            ],
+        )
+
     def _viewer3d_set_hover(self, name: str, text: str) -> None:
         self._viewer3d_hover_state = {"name": name, "text": text}
 
@@ -3572,6 +3632,7 @@ class MainWindow(QMainWindow):
         if ok:
             for script in pending:
                 self._viewer3d.page().runJavaScript(script)
+            self._viewer3d_set_hud_state(self.hud.animation_snapshot())
 
     def show_viewer3d(self, visible: bool) -> None:
         if visible:
@@ -4074,6 +4135,7 @@ class MainWindow(QMainWindow):
         if self._focus_mode:
             self.set_focus_mode(False)
         self._layout_timer.stop()
+        self._hud_reload_timer.stop()
         self._persist_layout(force=True)
         self._page_read_pending = False
         self._page_reader_audio_sig.emit(False)

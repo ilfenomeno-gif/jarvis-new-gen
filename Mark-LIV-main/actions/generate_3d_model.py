@@ -49,6 +49,17 @@ def _load_in_scene(player, path, model_id: str, scale, params=None) -> None:
 
 
 def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
+    set_hud_state = getattr(player, "set_jarvis_state", None)
+    if callable(set_hud_state):
+        set_hud_state("generating_3d")
+    try:
+        return _generate_3d_model(parameters, player, **_ignored)
+    finally:
+        if callable(set_hud_state):
+            set_hud_state("listening")
+
+
+def _generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
     params = parameters or {}
     image_path = str(params.get("image_path") or "").strip()
     image_url = str(params.get("image_url") or "").strip()

@@ -233,6 +233,25 @@ def test_quantum_hud_draws_blueprint_and_uses_runtime_telemetry():
     )
 
 
+def test_quantum_hud_applies_data_driven_visual_states():
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+
+    QApplication.instance() or QApplication(sys.argv)
+    hud = ui_module.HudCanvas("")
+    hud.set_jarvis_state("listening")
+    assert hud.animation_snapshot()["core_color"] == "#00ff88"
+    hud.set_jarvis_state("thinking")
+    assert hud.animation_snapshot()["core_color"] == "#ff8a00"
+    hud.set_jarvis_state("speaking")
+    assert hud.animation_snapshot()["core_color"] == "#ff00d4"
+    hud.set_jarvis_state("generating_3d")
+    assert hud.animation_snapshot()["particle_count"] == 48
+    assert hud.motion_state == "generating_3d"
+    hud.stop_animations()
+    hud.close()
+
+
 def test_docks_are_movable_closable_floatable_and_center_stays_central(real_ui):
     from PyQt6.QtWidgets import QDockWidget
     win = real_ui()._win

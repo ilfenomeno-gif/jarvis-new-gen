@@ -10,6 +10,7 @@ Management CLI for connectors and skills.
     python -m core.registry_cli set-tripo-key                 # hidden prompt, for generate_3d_model
     python -m core.registry_cli set-3d-backend auto|local|tripo
     python -m core.registry_cli download-cad-models           # multi-part CAD models for explode_model
+    python -m core.registry_cli reload_hud_states             # validate and notify running HUDs
 
 Tokens are read with a hidden prompt, never from argv, and stored via SecretStore.
 """
@@ -25,11 +26,11 @@ from typing import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.connectors import ConnectorError  # noqa: E402
-from core.jarvis_runtime import Runtime, build_runtime  # noqa: E402
+from core.jarvis_runtime import BASE_DIR, Runtime, build_runtime  # noqa: E402
 from core.skills import SkillError  # noqa: E402
 
 
-def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = getpass.getpass) -> str:
+def run(argv: list[str], runtime: Runtime | None, read_token: Callable[[str], str] = getpass.getpass) -> str:
     parser = argparse.ArgumentParser(prog="registry_cli")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
@@ -45,12 +46,19 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
     backend_cmd = sub.add_parser("set-3d-backend")
     backend_cmd.add_argument("backend", choices=("auto", "local", "tripo"))
     sub.add_parser("download-cad-models")
+    sub.add_parser("reload_hud_states")
     approve = sub.add_parser("skill-approve")
     approve.add_argument("skill")
     approve.add_argument("--reviewer", required=True)
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "reload_hud_states":
+            from core.hud_animator import HudAnimator, request_reload
+            config_dir = BASE_DIR / "config"
+            HudAnimator(config_dir).reload()
+            request_reload(config_dir)
+            return "HUD states validated; reload requested for running Jarvis instances."
         if args.command == "status":
             return json.dumps({"connectors": runtime.connectors.view(),
                                "skills": runtime.skills.view()}, indent=2, ensure_ascii=False)
@@ -66,7 +74,6 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
             return f"{args.connector}: revoked (dependent skills moved to review_required)"
         if args.command == "migrate-api-key":
             from core.api_keys import migrate
-            from core.jarvis_runtime import BASE_DIR
             result = migrate(BASE_DIR / "config", runtime.secrets, args.remove_plain)
             return result if result.startswith("error:") else f"gemini_api_key: {result}"
         if args.command == "set-3d-backend":
@@ -101,7 +108,9 @@ def run(argv: list[str], runtime: Runtime, read_token: Callable[[str], str] = ge
 
 
 def main() -> int:
-    output = run(sys.argv[1:], build_runtime())
+    argv = sys.argv[1:]
+    runtime = None if argv == ["reload_hud_states"] else build_runtime()
+    output = run(argv, runtime)
     print(output)
     return 1 if output.startswith("error:") else 0
 

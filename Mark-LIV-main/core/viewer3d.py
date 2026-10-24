@@ -23,8 +23,10 @@ ALLOWED = {
     "setMaterialStyle": 1,
     "setPartInfo": 1,
     "setControls": 1,
+    "setHudState": 6,
 }
 STYLES = ("hologram", "blueprint", "realistic", "flat", "toon")
+HUD_STATES = frozenset({"idle", "listening", "thinking", "speaking", "error", "generating_3d"})
 MAX_PART_INFO = 200
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "viewer3d" / "models"
@@ -221,6 +223,19 @@ def build_call(function: str, args: list) -> tuple[str, str]:
             for k, v in list(args[0].items())[:MAX_PART_INFO]
             if str(k).strip()
         }]
+    elif function == "setHudState":
+        state, color = args[0], args[1]
+        if not isinstance(state, str) or state not in HUD_STATES:
+            raise ValueError("unsupported HUD state")
+        if not isinstance(color, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            raise ValueError("core color must be a #RRGGBB value")
+        clean = [
+            state, color.lower(),
+            _coord(args[2], 0, 5, "ring speed"),
+            _coord(args[3], 0, 3, "glow intensity"),
+            _coord(args[4], 0, 100, "particle count"),
+            _coord(args[5], 0, 5, "transition"),
+        ]
     elif function == "spin":
         if not isinstance(args[0], bool):
             raise ValueError("spin takes true or false")

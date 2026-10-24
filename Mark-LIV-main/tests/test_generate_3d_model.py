@@ -70,6 +70,30 @@ def test_tool_messages_without_sdk_or_key(monkeypatch):
     assert "Invalid" in tool.generate_3d_model({"prompt": ""})
 
 
+def test_generation_sets_and_restores_hud_state(monkeypatch):
+    states = []
+
+    class Player:
+        def set_jarvis_state(self, state):
+            states.append(state)
+
+    monkeypatch.setattr(
+        tool, "_generate_3d_model",
+        lambda parameters, player=None: "generated",
+    )
+    assert tool.generate_3d_model({"prompt": "apple"}, player=Player()) == "generated"
+    assert states == ["generating_3d", "listening"]
+
+    states.clear()
+    monkeypatch.setattr(
+        tool, "_generate_3d_model",
+        lambda parameters, player=None: (_ for _ in ()).throw(RuntimeError("failed")),
+    )
+    with pytest.raises(RuntimeError, match="failed"):
+        tool.generate_3d_model({"prompt": "apple"}, player=Player())
+    assert states == ["generating_3d", "listening"]
+
+
 def test_tool_generates_and_loads(monkeypatch, tmp_path):
     monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "tripo")
     calls = []

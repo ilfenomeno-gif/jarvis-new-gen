@@ -45,6 +45,13 @@ function resetCamera() {
 const globe = new THREE.Group();
 scene.add(globe);
 const cyan = 0x00d4ff;
+const hudAnimation = {
+  state: "idle", color: new THREE.Color(cyan), fromColor: new THREE.Color(cyan),
+  targetColor: new THREE.Color(cyan), ringSpeed: 0.55, fromRingSpeed: 0.55,
+  targetRingSpeed: 0.55, glow: 0.8, fromGlow: 0.8, targetGlow: 0.8,
+  particles: 3, fromParticles: 3, targetParticles: 3, started: performance.now(),
+  duration: 0.3,
+};
 
 // Only the solid styles (blueprint, realistic) are lit; globe and hologram are unlit.
 const hemiLight = new THREE.HemisphereLight(0xcfe8ff, 0x10203a, 1.6);
@@ -160,15 +167,35 @@ function syncLook() {
   }
 }
 
-const sphere = new THREE.Mesh(
-  new THREE.SphereGeometry(1, 48, 32),
-  new THREE.MeshBasicMaterial({ color: cyan, wireframe: true, transparent: true, opacity: 0.18 })
+const coreGlow = new THREE.Mesh(
+  new THREE.SphereGeometry(1.16, 32, 24),
+  new THREE.MeshBasicMaterial({
+    color: cyan, transparent: true, opacity: 0.025,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  })
 );
+globe.add(coreGlow);
+const sphereMaterial = new THREE.MeshBasicMaterial({
+  color: cyan, wireframe: true, transparent: true, opacity: 0.18,
+});
+const sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 32), sphereMaterial);
 globe.add(sphere);
-globe.add(new THREE.Mesh(
-  new THREE.SphereGeometry(0.985, 32, 24),
-  new THREE.MeshBasicMaterial({ color: 0x001018, transparent: true, opacity: 0.85 })
-));
+const coreMaterial = new THREE.MeshBasicMaterial({
+  color: 0x001018, transparent: true, opacity: 0.85,
+});
+globe.add(new THREE.Mesh(new THREE.SphereGeometry(0.985, 32, 24), coreMaterial));
+
+const HUD_PARTICLE_MAX = 100;
+const hudParticleGeometry = new THREE.BufferGeometry();
+hudParticleGeometry.setAttribute(
+  "position", new THREE.BufferAttribute(new Float32Array(HUD_PARTICLE_MAX * 3), 3)
+);
+const hudParticleMaterial = new THREE.PointsMaterial({
+  color: cyan, size: 0.035, transparent: true, opacity: 0.85,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const hudParticles = new THREE.Points(hudParticleGeometry, hudParticleMaterial);
+globe.add(hudParticles);
 
 const rings = [];
 for (let i = 0; i < 3; i++) {
@@ -209,6 +236,7 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
+  updateHudAnimation(now);
   if (state.target) {
     globe.quaternion.slerp(state.target, Math.min(1, dt * 3));
     if (globe.quaternion.angleTo(state.target) < 0.005) {
@@ -217,7 +245,8 @@ function frame(now) {
   } else if (state.spin) {
     globe.rotation.y += dt * 0.25;
   }
-  rings.forEach((r, i) => { r.rotation.z += dt * (0.2 + i * 0.1); });
+  rings.forEach((r, i) => { r.rotation.z += dt * (0.2 + i * 0.1) * hudAnimation.ringSpeed; });
+  updateHudParticles(now);
   if (state.model && state.model.holo.length) {
     state.model.holo.forEach(m => { m.uniforms.uTime.value = now / 1000; });
   }
@@ -232,6 +261,38 @@ function frame(now) {
   if (controls.enabled) controls.update();
   if (renderer) renderer.render(scene, camera);
   requestAnimationFrame(frame);
+}
+
+function updateHudAnimation(now) {
+  const progress = hudAnimation.duration <= 0
+    ? 1 : Math.min(1, Math.max(0, (now - hudAnimation.started) / (hudAnimation.duration * 1000)));
+  const eased = progress * progress * (3 - 2 * progress);
+  hudAnimation.color.copy(hudAnimation.fromColor).lerp(hudAnimation.targetColor, eased);
+  hudAnimation.ringSpeed = THREE.MathUtils.lerp(hudAnimation.fromRingSpeed, hudAnimation.targetRingSpeed, eased);
+  hudAnimation.glow = THREE.MathUtils.lerp(hudAnimation.fromGlow, hudAnimation.targetGlow, eased);
+  hudAnimation.particles = THREE.MathUtils.lerp(hudAnimation.fromParticles, hudAnimation.targetParticles, eased);
+  sphereMaterial.color.copy(hudAnimation.color);
+  coreMaterial.color.copy(hudAnimation.color).multiplyScalar(0.06);
+  coreGlow.material.color.copy(hudAnimation.color);
+  coreGlow.material.opacity = Math.min(0.12, 0.025 * hudAnimation.glow);
+  hudParticleMaterial.color.copy(hudAnimation.color);
+  hudParticleMaterial.opacity = Math.min(1, 0.55 + hudAnimation.glow * 0.2);
+}
+
+function updateHudParticles(now) {
+  const count = Math.min(HUD_PARTICLE_MAX, Math.max(0, Math.round(hudAnimation.particles)));
+  const positions = hudParticleGeometry.attributes.position;
+  const time = now / 1000;
+  for (let i = 0; i < count; i++) {
+    const phase = i * 2.399963;
+    const orbit = time * (0.25 + hudAnimation.ringSpeed * 0.12) + phase;
+    const latitude = Math.sin(phase * 1.7 + time * 0.18) * 0.82;
+    const radius = 1.12 + 0.16 * Math.sin(phase + time * 0.8);
+    const planar = Math.sqrt(1 - latitude * latitude);
+    positions.setXYZ(i, Math.cos(orbit) * planar * radius, latitude * radius, Math.sin(orbit) * planar * radius);
+  }
+  positions.needsUpdate = count > 0;
+  hudParticleGeometry.setDrawRange(0, count);
 }
 
 function num(v, lo, hi, name) {
@@ -556,6 +617,26 @@ window.jarvisViewer = {
     if (state.flights) { globe.remove(state.flights.obj); state.flights.obj.geometry.dispose(); }
     state.flights = null;
   },
+  setHudState(name, color, ringSpeed, glow, particles, transitionSeconds) {
+    name = String(name);
+    color = String(color);
+    if (!["idle", "listening", "thinking", "speaking", "error", "generating_3d"].includes(name)) {
+      throw new Error("unsupported HUD state");
+    }
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error("invalid HUD color");
+    updateHudAnimation(performance.now());
+    hudAnimation.state = name;
+    hudAnimation.fromColor.copy(hudAnimation.color);
+    hudAnimation.targetColor.set(color);
+    hudAnimation.fromRingSpeed = hudAnimation.ringSpeed;
+    hudAnimation.targetRingSpeed = num(ringSpeed, 0, 5, "ring speed");
+    hudAnimation.fromGlow = hudAnimation.glow;
+    hudAnimation.targetGlow = num(glow, 0, 3, "glow intensity");
+    hudAnimation.fromParticles = hudAnimation.particles;
+    hudAnimation.targetParticles = num(particles, 0, HUD_PARTICLE_MAX, "particle count");
+    hudAnimation.started = performance.now();
+    hudAnimation.duration = num(transitionSeconds, 0, 5, "transition");
+  },
   loadModel(name) {
     this.removeModel();
     const token = ++loadToken;
@@ -652,6 +733,15 @@ window.jarvisViewer = {
     return {
       ready: state.ready,
       webgl: !!renderer,
+      hud: {
+        state: hudAnimation.state,
+        color: "#" + hudAnimation.color.getHexString(),
+        targetColor: "#" + hudAnimation.targetColor.getHexString(),
+        ringSpeed: hudAnimation.ringSpeed,
+        glow: hudAnimation.glow,
+        particles: Math.round(hudAnimation.particles),
+        targetParticles: Math.round(hudAnimation.targetParticles),
+      },
       controls: { enabled: controls.enabled, wanted: state.controlsOn, distance: Number(camera.position.distanceTo(controls.target).toFixed(3)), azimuth: Number(controls.getAzimuthalAngle().toFixed(3)) },
       flights: state.flights ? state.flights.list.length : 0,
       look: { environment: !!scene.environment, envLoaded: !!envMap, envError: state.envError || "", shadows: keyLight.castShadow, shadowFloor: shadowFloor.visible, toneMapping: renderer ? renderer.toneMapping : 0, shadowCasters: state.model ? state.model.meshes.filter(o => o.castShadow).length : 0 },

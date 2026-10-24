@@ -12,6 +12,8 @@ npx esbuild <percorso>/src/viewer.js --bundle --minify --format=iife "--define:i
 
 API JS esposta come `window.jarvisViewer`: `flyTo(lat, lon)`, `addMarker(lat, lon, label)`, `clearMarkers()`, `spin(on)`, `setMaterialStyle('hologram'|'blueprint'|'realistic')`, `setPartInfo({parte: descrizione})` (tooltip al passaggio del mouse), `getState()`.
 
+Gli stati visuali sono definiti in `config/hud_states.json` e le durate in `config/hud_transitions.json`; PyQt6 interpola core, anelli, glow, waveform e particelle, mentre il viewer anima core, anelli e particelle con gli stessi parametri. Dopo aver modificato i JSON, eseguire `python -m core.registry_cli reload_hud_states` dalla cartella `Mark-LIV-main`: l'istanza attiva rileva il segnale su file e ricarica senza riavvio.
+
 
 HDRI `hdr/studio.hdr`: Poly Haven `studio_small_03` 1k, licenza CC0 (usato da `realistic` per riflessi PBR).
 

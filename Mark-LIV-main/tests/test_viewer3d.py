@@ -16,10 +16,13 @@ def test_build_call_validates_and_serialises():
     assert build_call("flyTo", [41.9, 12.5]) == ("flyTo", "[41.9, 12.5]")
     assert build_call("addMarker", ["10", 20, "x" * 100])[1].count("x") == 60
     assert build_call("clearMarkers", []) == ("clearMarkers", "[]")
+    assert build_call("setHudState", ["listening", "#00ff88", 0.9, 1.1, 8, 0.3])[0] == "setHudState"
     for bad in (
         ("flyTo", [91, 0]), ("flyTo", [0, 181]), ("flyTo", ["a", 0]),
         ("flyTo", [True, 0]), ("flyTo", [1]), ("spin", [1]),
         ("eval", []), ("document.write", ["x"]),
+        ("setHudState", ["unknown", "#00ff88", 0.9, 1.1, 8, 0.3]),
+        ("setHudState", ["idle", "blue", 0.9, 1.1, 8, 0.3]),
     ):
         with pytest.raises(ValueError):
             build_call(*bad)
