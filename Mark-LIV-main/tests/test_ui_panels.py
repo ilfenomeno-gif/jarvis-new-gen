@@ -166,6 +166,73 @@ def test_real_window_renders_each_workspace(real_ui):
     assert jarvis.panel_status()["workspace"] == "custom"
 
 
+def test_quantum_hud_draws_blueprint_and_uses_runtime_telemetry():
+    from types import SimpleNamespace
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtGui import QPixmap
+    import ui as ui_module
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    hud = ui_module.HudCanvas("")
+    hud.resize(420, 480)
+    assert hud._projection_status == "WAITING FOR 3D MODEL"
+
+    hud.set_system_metrics(37, -1)
+    hud.set_projection_status("MODEL READY / demo")
+    assert hud._cpu_percent == 37
+    assert hud._gpu_percent == -1
+    assert hud._projection_status == "MODEL READY / DEMO"
+    pixmap = QPixmap(hud.size())
+    hud.render(pixmap)
+    assert not pixmap.isNull()
+    hud.stop_animations()
+    hud.close()
+
+    class Gauge:
+        def __init__(self):
+            self.value = None
+
+        def set_value(self, pct, text):
+            self.value = (pct, text)
+
+    class Progress:
+        value = None
+
+        def setValue(self, value):
+            self.value = value
+
+    class Label:
+        text = ""
+
+        def setText(self, text):
+            self.text = text
+
+    fake_window = SimpleNamespace(
+        get_hud_runtime=lambda: {
+        "skills": {"active": 2, "total": 4},
+        "task": {
+            "status": "awaiting_confirmation",
+            "completed": 1,
+            "total": 4,
+            "progress": 25,
+        },
+        },
+        _gauge_skills=Gauge(),
+        _gauge_task=Gauge(),
+        _gauge_load=Gauge(),
+        _task_runner_progress=Progress(),
+        _task_runner_label=Label(),
+    )
+    ui_module.MainWindow._update_hud_runtime(fake_window)
+    assert fake_window._gauge_skills.value == (50.0, "2/4")
+    assert fake_window._gauge_task.value == (25, "1/4")
+    assert fake_window._gauge_load.value == (0, "N/A")
+    assert fake_window._task_runner_progress.value == 25
+    assert fake_window._task_runner_label.text == (
+        "TASK RUNNER: 25% - AWAITING CONFIRMATION"
+    )
+
+
 def test_docks_are_movable_closable_floatable_and_center_stays_central(real_ui):
     from PyQt6.QtWidgets import QDockWidget
     win = real_ui()._win

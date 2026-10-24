@@ -12,6 +12,15 @@ from tests.glb_helper import make_glb
 READY = {"torch": True, "cuda": True, "gpu": "RTX 4060", "vram_gb": 8.0, "missing": []}
 
 
+@pytest.fixture(autouse=True)
+def isolate_generation_log(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        gen,
+        "_LOG_PATH",
+        tmp_path.parent / f"{tmp_path.name}-local_3d_gen.log",
+    )
+
+
 def line(payload):
     return gen.RESULT_PREFIX + json.dumps(payload)
 
@@ -47,6 +56,37 @@ def test_generate_success(tmp_path):
     assert path.name == model_gen.model_name("a simple chair") and path.read_bytes()[:4] == b"glTF"
     assert [p.name for p in tmp_path.iterdir()] == [path.name]
     assert any("--prompt" in c for c in runner.calls)
+
+
+def test_generation_logs_fallback_and_timings_without_prompt(monkeypatch, tmp_path):
+    monkeypatch.setattr(gen, "_LOG_PATH", tmp_path / "local_3d_gen.log")
+    monkeypatch.setattr(gen, "probe", lambda runner=None: READY)
+
+    def runner(cmd, timeout):
+        if "--probe" in cmd:
+            raise AssertionError("readiness is supplied by the test")
+        make_glb(cmd[cmd.index("--out") + 1])
+        output = "\n".join((
+            'TIMING {"stage":"triposr_load","seconds":12.5}',
+            'BACKEND_FALLBACK {"from":"sf3d","to":"triposr","reason":"OutOfMemoryError: CUDA out of memory"}',
+            line({"ok": True, "backend": "triposr"}),
+        ))
+        return 0, output, ""
+
+    gen.generate_local("private prompt must not be logged", tmp_path, runner)
+    log = (tmp_path / "local_3d_gen.log").read_text(encoding="utf-8")
+    assert '"event": "backend_fallback"' in log
+    assert '"category": "oom"' in log
+    assert '"stage": "triposr_load"' in log and '"seconds": 12.5' in log
+    assert '"backend": "triposr"' in log
+    assert "private prompt must not be logged" not in log
+    assert "CUDA out of memory" not in log
+    with pytest.raises(RuntimeError, match="out of memory"):
+        gen.generate_local(
+            "private prompt", tmp_path, make_runner(result={"ok": False, "code": "oom"})
+        )
+    log = (tmp_path / "local_3d_gen.log").read_text(encoding="utf-8")
+    assert '"category": "oom"' in log
 
 
 def test_generate_errors_and_cleanup(tmp_path):

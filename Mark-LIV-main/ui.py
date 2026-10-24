@@ -54,6 +54,15 @@ from core.browser_url import is_allowed_http_scheme, normalize_http_url
 from gemini_chat_window import GeminiChatPanel, GeminiChatWindow
 
 _GEV_URL = "http://127.0.0.1:4173/?ui=panels"
+
+
+def _gev_url() -> str:
+    """GEV page URL; the plugin publishes the port it actually bound (4173 unless it was busy)."""
+    port = os.environ.get("JARVIS_GEV_PORT", "")
+    if port.isdigit() and 1024 <= int(port) <= 65535:
+        return f"http://127.0.0.1:{port}/?ui=panels"
+    return _GEV_URL
+
 _GEV_LAYERS = {
     "flights": "flights",
     "vessels": "ais-live-vessels",
@@ -105,9 +114,17 @@ class ViewerBridge(QObject):
     """QWebChannel object exposed to viewer.js as `bridge` (hover and 3D events)."""
 
     hoverChanged = pyqtSignal(str, str)
+    viewerEvent = pyqtSignal(str, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
+    @pyqtSlot(str, str)
+    def onEvent(self, name: str, payload_json: str) -> None:
+        from core.viewer3d import parse_event
+        event = parse_event(name, payload_json)
+        if event is not None:
+            self.viewerEvent.emit(*event)
 
     @pyqtSlot(str, str)
     def onHover(self, name: str, text: str) -> None:
@@ -509,6 +526,9 @@ class HudCanvas(QWidget):
         self._amp_disp  = 0.0
         self._base_scale = 1.0    # slow "breathing" target; amp is added per-frame
         self._base_halo  = 55.0
+        self._cpu_percent = 0.0
+        self._gpu_percent = -1.0
+        self._projection_status = "WAITING FOR 3D MODEL"
 
         self._frame = 0
         try:
@@ -552,6 +572,15 @@ class HudCanvas(QWidget):
             lv = 1.0
         if lv > self._live_amp:
             self._live_amp = lv
+
+    def set_system_metrics(self, cpu: float, gpu: float) -> None:
+        self._cpu_percent = max(0.0, min(100.0, float(cpu)))
+        self._gpu_percent = float(gpu)
+        self.update()
+
+    def set_projection_status(self, status: str) -> None:
+        self._projection_status = str(status or "WAITING FOR 3D MODEL")[:36].upper()
+        self.update()
 
     def _load_face(self, path: str):
         try:
@@ -816,6 +845,8 @@ class HudCanvas(QWidget):
         p.setPen(QPen(qcol(C.ACC, sa // 2), 1.5))
         p.drawArc(srect, int(self._scan2 * 16), int(ex * 16))
 
+        self._draw_quantum_blueprint(p, W, H, cx, cy, fw, state_color)
+
         # tick marks, crosshair and corner brackets live in the static cache
 
         # particles
@@ -859,6 +890,13 @@ class HudCanvas(QWidget):
         N, bw = 36, 8
         wx0 = (W - N * bw) / 2
         amp = self._amp_disp
+        p.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        p.setPen(QPen(qcol(C.TEXT_DIM), 1))
+        p.drawText(
+            QRectF(0, wy - 13, W, 11),
+            Qt.AlignmentFlag.AlignCenter,
+            "STIMULUS / VOICE INPUT",
+        )
         mid = (N - 1) / 2.0
         for i in range(N):
             if self.muted:
@@ -875,6 +913,136 @@ class HudCanvas(QWidget):
             p.fillRect(QRectF(wx0 + i * bw, wy + 20 - hgt, bw - 1, hgt), cl)
 
         p.end()   # end deterministically so the backing store never flushes an active painter
+
+    def _draw_quantum_blueprint(
+        self, p: QPainter, W: int, H: int, cx: float, cy: float,
+        fw: int, state_color: str,
+    ) -> None:
+        radius = fw * 0.16
+        core_y = cy + fw * 0.015
+        top_y = core_y - fw * 0.36
+        cylinder_w = fw * 0.27
+        cylinder_h = fw * 0.15
+        p.save()
+
+        p.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        p.setPen(QPen(qcol(C.PRI), 1))
+        p.drawText(
+            QRectF(cx - fw * 0.29, top_y - 18, fw * 0.58, 10),
+            Qt.AlignmentFlag.AlignCenter,
+            "PROJECTION AREA",
+        )
+        p.setFont(QFont("Courier New", 5))
+        p.setPen(QPen(qcol(C.TEXT_DIM), 1))
+        p.drawText(
+            QRectF(cx - fw * 0.34, top_y - 8, fw * 0.68, 10),
+            Qt.AlignmentFlag.AlignCenter,
+            self._projection_status,
+        )
+
+        p.setPen(QPen(qcol(C.PRI, 130), 1, Qt.PenStyle.DashLine))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(cx - cylinder_w / 2, top_y), QPointF(cx - cylinder_w / 2, top_y + cylinder_h))
+        p.drawLine(QPointF(cx + cylinder_w / 2, top_y), QPointF(cx + cylinder_w / 2, top_y + cylinder_h))
+        p.drawEllipse(QRectF(cx - cylinder_w / 2, top_y - cylinder_h * 0.18, cylinder_w, cylinder_h * 0.36))
+        p.drawArc(
+            QRectF(cx - cylinder_w / 2, top_y + cylinder_h - cylinder_h * 0.18,
+                   cylinder_w, cylinder_h * 0.36),
+            0, 180 * 16,
+        )
+        p.drawArc(
+            QRectF(cx - cylinder_w / 2, top_y + cylinder_h - cylinder_h * 0.18,
+                   cylinder_w, cylinder_h * 0.36),
+            180 * 16, 180 * 16,
+        )
+
+        glow = QRadialGradient(QPointF(cx, core_y), radius * 1.2)
+        glow.setColorAt(0, qcol(state_color, 38))
+        glow.setColorAt(0.72, qcol(C.PRI, 16))
+        glow.setColorAt(1, qcol(C.PRI, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(glow))
+        p.drawEllipse(QRectF(cx - radius * 1.2, core_y - radius * 1.2,
+                             radius * 2.4, radius * 2.4))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(qcol(C.PRI, 210), 1.2))
+        p.drawEllipse(QRectF(cx - radius, core_y - radius, radius * 2, radius * 2))
+        for latitude in (-0.62, -0.32, 0, 0.32, 0.62):
+            half_width = radius * math.sqrt(1 - latitude * latitude)
+            ellipse_h = max(2.0, radius * (0.19 if latitude else 0.28))
+            color = C.ACC if latitude == 0 else C.PRI
+            p.setPen(QPen(qcol(color, 185 if latitude == 0 else 110), 1))
+            p.drawEllipse(QRectF(
+                cx - half_width, core_y + radius * latitude - ellipse_h / 2,
+                half_width * 2, ellipse_h,
+            ))
+        for longitude in (0.42, 0.72, 1.0):
+            p.setPen(QPen(qcol(C.PRI, 120), 1))
+            p.drawEllipse(QRectF(
+                cx - radius * longitude, core_y - radius,
+                radius * 2 * longitude, radius * 2,
+            ))
+
+        pad_y = core_y + radius * 1.55
+        pad_w = fw * 0.29
+        p.setPen(QPen(qcol(C.PRI, 180), 1))
+        p.drawEllipse(QRectF(cx - pad_w / 2, pad_y - fw * 0.025, pad_w, fw * 0.05))
+        p.setPen(QPen(qcol(C.ACC, 145), 1))
+        p.drawEllipse(QRectF(cx - pad_w * 0.34, pad_y - fw * 0.014,
+                             pad_w * 0.68, fw * 0.028))
+        p.drawLine(
+            QPointF(cx - pad_w / 2, pad_y),
+            QPointF(cx - pad_w / 2, pad_y + fw * 0.025),
+        )
+        p.drawLine(
+            QPointF(cx + pad_w / 2, pad_y),
+            QPointF(cx + pad_w / 2, pad_y + fw * 0.025),
+        )
+        p.drawArc(
+            QRectF(cx - pad_w / 2, pad_y, pad_w, fw * 0.05), 180 * 16, 180 * 16
+        )
+        p.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        p.setPen(QPen(qcol(C.TEXT_MED), 1))
+        p.drawText(
+            QRectF(cx - pad_w / 2, pad_y + fw * 0.025, pad_w, 10),
+            Qt.AlignmentFlag.AlignCenter,
+            "QUANTUM CORE / PROJECTION PAD",
+        )
+
+        side_y = 20
+        p.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        p.setPen(QPen(qcol(C.TEXT_MED), 1))
+        p.drawText(QRectF(12, side_y, fw * 0.31, 10),
+                   Qt.AlignmentFlag.AlignLeft, "STIMULUS / VOICE")
+        p.setPen(QPen(qcol(C.PRI, 110), 1))
+        p.drawLine(QPointF(12, side_y + 13), QPointF(cx - radius, core_y - radius * 0.45))
+        wave_x = 12.0
+        wave_y = side_y + 22
+        wave_color = C.GREEN if self.motion_state == "listening" else C.PRI
+        for index in range(12):
+            envelope = 0.4 + 0.6 * math.sin(index * 0.58 + self._tick * 0.12)
+            bar_h = 2 + int(envelope * (3 + self._amp_disp * 9))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(qcol(wave_color, 185 if self._amp_disp > 0.02 else 90)))
+            p.drawRect(QRectF(wave_x + index * 5, wave_y - bar_h / 2, 3, bar_h))
+        p.setPen(QPen(qcol(C.TEXT_MED), 1))
+        gpu_text = f"GPU {self._gpu_percent:.0f}%" if self._gpu_percent >= 0 else "GPU N/A"
+        p.drawText(
+            QRectF(W - fw * 0.33, side_y, fw * 0.31, 10),
+            Qt.AlignmentFlag.AlignRight,
+            f"REACTION / {gpu_text}",
+        )
+        p.setFont(QFont("Courier New", 5))
+        p.setPen(QPen(qcol(C.TEXT_DIM), 1))
+        p.drawText(
+            QRectF(W - fw * 0.33, side_y + 10, fw * 0.31, 10),
+            Qt.AlignmentFlag.AlignRight,
+            f"CPU {self._cpu_percent:.0f}%  VRAM N/A",
+        )
+        p.setPen(QPen(qcol(C.ACC, 110), 1))
+        p.drawLine(QPointF(W - 12, side_y + 24),
+                   QPointF(cx + radius, core_y - radius * 0.45))
+        p.restore()
 
 class MetricBar(QWidget):
 
@@ -942,6 +1110,47 @@ class MetricBar(QWidget):
         p.drawText(QRectF(48, 18, W - 54, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._text)
 
         p.end()
+
+
+class HudGauge(QWidget):
+    def __init__(self, label: str, color: str = C.PRI, parent=None):
+        super().__init__(parent)
+        self._label = label
+        self._color = color
+        self._value = 0.0
+        self._text = "N/A"
+        self.setFixedSize(82, 70)
+
+    def set_value(self, pct: float, text: str) -> None:
+        self._value = max(0.0, min(100.0, float(pct)))
+        self._text = str(text)[:8]
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        if not p.isActive():
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx, cy, radius = self.width() / 2, 22.0, 15.0
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(qcol(C.BORDER_A), 3))
+        p.drawEllipse(QPointF(cx, cy), radius, radius)
+        if self._value:
+            p.setPen(QPen(qcol(self._color), 3))
+            p.drawArc(
+                QRectF(cx - radius, cy - radius, radius * 2, radius * 2),
+                90 * 16, -int(self._value * 3.6 * 16),
+            )
+        p.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        p.setPen(QPen(qcol(C.TEXT), 1))
+        p.drawText(QRectF(1, 16, self.width() - 2, 12),
+                   Qt.AlignmentFlag.AlignCenter, self._text)
+        p.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        p.setPen(QPen(qcol(C.TEXT_MED), 1))
+        p.drawText(QRectF(0, 45, self.width(), 15),
+                   Qt.AlignmentFlag.AlignCenter, self._label)
+        p.end()
+
 
 class LogWidget(QTextEdit):
     _sig = pyqtSignal(str)
@@ -2764,6 +2973,7 @@ class HudDock(QDockWidget):
 class MainWindow(QMainWindow):
     _log_sig          = pyqtSignal(str)
     _state_sig        = pyqtSignal(str)
+    _content_hide_sig = pyqtSignal(str)      # title prefix of the content panel to close
     _content_sig      = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig     = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig       = pyqtSignal(bytes)      # show camera frame preview (small overlay)
@@ -2853,6 +3063,7 @@ class MainWindow(QMainWindow):
         self.on_audio_device_change = None  # callable: () -> None — reopen audio streams
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
         self.get_plugins       = None   # callable: () -> list[dict], set by JarvisLive
+        self.get_hud_runtime  = None   # callable: () -> runtime telemetry, set by JarvisLive
         self._muted            = False
         self._current_file: str | None = None
         self._remote_overlay: RemoteKeyOverlay | None = None
@@ -3021,6 +3232,7 @@ class MainWindow(QMainWindow):
         self._log_sig.connect(self._on_log_message)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
+        self._content_hide_sig.connect(self._hide_content_if)
         self._widget_sig.connect(self._on_widget)
         self._gev_send_sig.connect(self._on_gev_send)
         self._gemini_chat_sig.connect(self._show_gemini_chat)
@@ -3273,6 +3485,7 @@ class MainWindow(QMainWindow):
             page = _ViewerPage(view)
             self._viewer3d_bridge = ViewerBridge(view)
             self._viewer3d_bridge.hoverChanged.connect(self._viewer3d_set_hover)
+            self._viewer3d_bridge.viewerEvent.connect(self._viewer3d_on_event)
             self._viewer3d_channel = QWebChannel(page)
             self._viewer3d_channel.registerObject("bridge", self._viewer3d_bridge)
             page.setWebChannel(self._viewer3d_channel)
@@ -3294,6 +3507,61 @@ class MainWindow(QMainWindow):
         return self._viewer3d
 
     _viewer3d_hover_state: dict = {"name": "", "text": ""}
+    _viewer3d_models: dict = {}
+    _viewer3d_active: str = ""
+    _viewer3d_look: dict = {}
+    _LOOK_COMMANDS = ("setLighting", "setMaterialStyle")
+    _viewer3d_last_error: str = ""
+    _viewer3d_shot = None  # {"event": threading.Event, "path": str, "error": str} while a screenshot is awaited
+
+    def _viewer3d_on_event(self, name: str, payload: dict) -> None:
+        """Events from viewer.js (QWebChannel), already whitelisted and size-checked."""
+        from core.viewer3d import save_screenshot
+        if name == "modelLoaded":
+            self._viewer3d_models = {**self._viewer3d_models, str(payload.get("id")): payload}
+            self._viewer3d_active = str(payload.get("id"))
+            self.hud.set_projection_status(f"MODEL READY / {payload.get('id', '')}")
+            self.show_viewer3d(True)
+            if self._viewer3d_loaded:
+                for look_script in self._viewer3d_look.values():
+                    self._viewer3d.page().runJavaScript(look_script)
+        elif name == "modelRemoved":
+            self._viewer3d_models = {k: v for k, v in self._viewer3d_models.items() if k != payload.get("id")}
+            if self._viewer3d_active == str(payload.get("id")):
+                self._viewer3d_active = next(reversed(self._viewer3d_models), "")
+            self.hud.set_projection_status(
+                f"MODEL READY / {self._viewer3d_active}"
+                if self._viewer3d_active else "WAITING FOR 3D MODEL"
+            )
+        elif name == "activeModelChanged":
+            self._viewer3d_active = str(payload.get("id"))
+            if self._viewer3d_active in self._viewer3d_models:
+                self.hud.set_projection_status(
+                    f"MODEL READY / {self._viewer3d_active}"
+                )
+        elif name == "commandError":
+            self._viewer3d_last_error = str(payload.get("message", ""))[:300]
+            if payload.get("command") == "loadModel":
+                self.hud.set_projection_status(
+                    f"MODEL LOAD FAILED / {self._viewer3d_last_error}"
+                )
+                self.show_viewer3d(False)
+            shot = self._viewer3d_shot
+            if shot and payload.get("command") == "screenshot":
+                shot["error"] = self._viewer3d_last_error
+                shot["event"].set()
+        elif name == "screenshot":
+            shot = self._viewer3d_shot
+            try:
+                path = save_screenshot(payload.get("dataUrl"))
+            except (ValueError, OSError) as exc:
+                if shot:
+                    shot["error"] = str(exc)
+            else:
+                if shot:
+                    shot["path"] = str(path)
+            if shot:
+                shot["event"].set()
 
     def _viewer3d_set_hover(self, name: str, text: str) -> None:
         self._viewer3d_hover_state = {"name": name, "text": text}
@@ -3317,12 +3585,25 @@ class MainWindow(QMainWindow):
         from core.viewer3d import build_call
         function, args_json = build_call(function, json.loads(args_json))
         script = (
-            f"window.jarvisViewer.{function}"
-            f"(...JSON.parse({json.dumps(args_json)}))"
+            f"try {{ window.jarvisViewer.{function}(...JSON.parse({json.dumps(args_json)})); }} "
+            f"catch (e) {{ window.jarvisViewer.onEvent('commandError', "
+            f"{{command: {json.dumps(function)}, message: String(e && e.message || e)}}); }}"
         )
         self._viewer3d_ensure()
+        if function == "clearModel" or (function == "loadModel" and len(json.loads(args_json)) == 1):
+            # A replacing load supersedes queued model commands from before page load.
+            self._viewer3d_pending = [
+                s for s in self._viewer3d_pending
+                if not any(f"window.jarvisViewer.{n}(" in s for n in (
+                    "loadModel", "clearModel", "removeModel", "setPartInfo",
+                    "highlightPart", "explodeModel"))
+            ]
         if function in ("flyTo", "addMarker", "setFlights", "loadModel"):
             self.show_viewer3d(True)
+        if function in self._LOOK_COMMANDS:
+            # Remembered and re-applied after every model load, so a look requested while
+            # a model is still loading (or after a failed call) is never lost.
+            self._viewer3d_look = {**self._viewer3d_look, function: script}
         if self._viewer3d_loaded:
             self._viewer3d.page().runJavaScript(script)
         else:
@@ -3423,7 +3704,7 @@ class MainWindow(QMainWindow):
         self._gev_ready_evt.clear()
         self._gev_placeholder.setText("AVVIO GOD'S EYE VIEW…")
         self._gev_stack.setCurrentWidget(self._gev_placeholder)
-        self._gev_view.load(QUrl(_GEV_URL))
+        self._gev_view.load(QUrl(_gev_url()))
 
     def show_gev_tab(self) -> None:
         """Expand GEV in the center pane and expose its main navigation panels."""
@@ -3875,7 +4156,7 @@ class MainWindow(QMainWindow):
         self._gev_ready_evt.clear()
         self._gev_placeholder.setText("GEV NON DISPONIBILE — controllare il server")
         self._gev_stack.setCurrentWidget(self._gev_placeholder)
-        self._log_sig.emit(f"GEV: caricamento fallito da {_GEV_URL}")
+        self._log_sig.emit(f"GEV: caricamento fallito da {_gev_url()}")
 
     def _on_gev_message(self, message: dict) -> None:
         message_type = message.get("type")
@@ -4514,6 +4795,9 @@ class MainWindow(QMainWindow):
             self._bar_tmp.set_value(tmp_pct, f"{tmp:.0f}°C")
         else:
             self._bar_tmp.set_value(0, "N/A")
+        self.hud.set_system_metrics(cpu, gpu)
+
+        self._update_hud_runtime()
 
         try:
             boot_t  = psutil.boot_time()
@@ -4530,6 +4814,36 @@ class MainWindow(QMainWindow):
         except Exception:
             self._proc_lbl.setText("PROC  --")
 
+    def _update_hud_runtime(self) -> None:
+        if not callable(self.get_hud_runtime):
+            snapshot = {
+                "skills": {"active": 0, "total": 0},
+                "task": {"status": "idle", "completed": 0, "total": 0, "progress": 0},
+            }
+        else:
+            snapshot = self.get_hud_runtime()
+
+        skills = snapshot["skills"]
+        skill_total = int(skills["total"])
+        skill_active = int(skills["active"])
+        skill_pct = 100 * skill_active / skill_total if skill_total else 0
+        self._gauge_skills.set_value(
+            skill_pct,
+            f"{skill_active}/{skill_total}" if skill_total else "N/A",
+        )
+
+        task = snapshot["task"]
+        task_total = int(task["total"])
+        task_done = int(task["completed"])
+        task_pct = int(task["progress"])
+        task_status = str(task["status"]).upper().replace("_", " ")
+        task_reading = f"{task_done}/{task_total}" if task_total else task_status[:8]
+        self._gauge_task.set_value(task_pct, task_reading)
+        self._gauge_load.set_value(0, "N/A")
+        self._task_runner_progress.setValue(task_pct)
+        self._task_runner_label.setText(
+            f"TASK RUNNER: {task_pct}% - {task_status}"
+        )
 
     def _build_header(self) -> QWidget:
         w = QWidget()
@@ -4633,6 +4947,26 @@ class MainWindow(QMainWindow):
         hdr.setStyleSheet(f"color: {C.PRI}; background: transparent; "
                           f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 4px;")
         lay.addWidget(hdr)
+
+        function_hint = QLabel("FUNCTION: Plugin Status & System Metrics")
+        function_hint.setWordWrap(True)
+        function_hint.setFont(QFont("Courier New", 6))
+        function_hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        lay.addWidget(function_hint)
+
+        for names in (("VOICE", "LOGIC", "DATA"), ("SEARCH", "VISION")):
+            icon_row = QHBoxLayout()
+            icon_row.setSpacing(3)
+            for name in names:
+                icon = QLabel(name)
+                icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                icon.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+                icon.setStyleSheet(
+                    f"color: {C.TEXT_MED}; background: {C.PANEL2};"
+                    f"border: 1px solid {C.BORDER}; padding: 3px 2px;"
+                )
+                icon_row.addWidget(icon, stretch=1)
+            lay.addLayout(icon_row)
         lay.addSpacing(2)
 
         self._bar_cpu = MetricBar("CPU", C.PRI)
@@ -4700,7 +5034,30 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(6)
+
+        callout = QLabel("FUNCTION: Task Execution & Cognitive Load")
+        callout.setWordWrap(True)
+        callout.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        callout.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        lay.addWidget(callout)
+
+        gauge_row = QHBoxLayout()
+        gauge_row.setSpacing(2)
+        self._gauge_skills = HudGauge("SKILLS", C.PRI)
+        self._gauge_task = HudGauge("TASK", C.ACC)
+        self._gauge_load = HudGauge("LOAD", C.ACC2)
+        for gauge in (self._gauge_skills, self._gauge_task, self._gauge_load):
+            gauge_row.addWidget(gauge)
+        gauge_row.addStretch(1)
+        lay.addLayout(gauge_row)
+
+        load_note = QLabel("Cognitive-load telemetry: N/A")
+        load_note.setFont(QFont("Courier New", 6))
+        load_note.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        lay.addWidget(load_note)
+
         self._log = LogWidget()
+        self._log.setPlaceholderText("[JARVIS]: Ready, waiting for command")
         lay.addWidget(self._log, stretch=1)
         return w
 
@@ -4735,6 +5092,27 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(_sec("COMMAND INPUT"))
         lay.addLayout(self._build_input_row())
+
+        self._task_runner_label = QLabel("TASK RUNNER: 0% - IDLE")
+        self._task_runner_label.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._task_runner_label.setStyleSheet(
+            f"color: {C.TEXT_MED}; background: transparent;"
+        )
+        lay.addWidget(self._task_runner_label)
+        self._task_runner_progress = QProgressBar()
+        self._task_runner_progress.setRange(0, 100)
+        self._task_runner_progress.setValue(0)
+        self._task_runner_progress.setTextVisible(True)
+        self._task_runner_progress.setFormat("%p%")
+        self._task_runner_progress.setFixedHeight(12)
+        self._task_runner_progress.setStyleSheet(f"""
+            QProgressBar {{
+                background: {C.BAR_BG}; border: 1px solid {C.BORDER};
+                border-radius: 2px; color: {C.TEXT}; text-align: center;
+            }}
+            QProgressBar::chunk {{ background: {C.PRI_DIM}; }}
+        """)
+        lay.addWidget(self._task_runner_progress)
 
         self._interrupt_btn = QPushButton("✋  INTERRUPT  [ESC]")
         self._interrupt_btn.setFixedHeight(34)
@@ -4945,7 +5323,7 @@ class MainWindow(QMainWindow):
     def _build_input_row(self) -> QHBoxLayout:
         row = QHBoxLayout(); row.setSpacing(5)
         self._input = QLineEdit()
-        self._input.setPlaceholderText("Type a command or question…")
+        self._input.setPlaceholderText("> Waiting for input...")
         self._input.setFont(QFont("Courier New", 9))
         self._input.setFixedHeight(30)
         self._input.setStyleSheet(f"""
@@ -5062,6 +5440,12 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._content_display)
 
         return w
+
+    def _hide_content_if(self, prefix: str) -> None:
+        """Close the content panel, but only if it still shows a result whose title starts with prefix."""
+        title = self._content_title_lbl.text().upper()
+        if self._content_panel.isVisible() and title.startswith(prefix.upper()):
+            self._content_panel.hide()
 
     def _show_content(self, title: str, text: str):
         """Slot — runs on Qt main thread. Updates and shows the content panel."""
@@ -5797,14 +6181,33 @@ class MainWindow(QMainWindow):
         self._overlay = ov
 
     def _warn_plaintext_key(self) -> None:
+        if os.environ.get("JARVIS_ALLOW_PLAINTEXT_KEY") == "1":
+            log_message = (
+                "SYS: WARNING - secure storage unavailable: the API key was written "
+                "in PLAIN TEXT to config/api_keys.json. Do not share that file."
+            )
+            dialog_message = (
+                "L'archiviazione sicura non è disponibile: la chiave API è stata salvata "
+                "IN CHIARO in config/api_keys.json.\n\nNon condividere quel file."
+            )
+        else:
+            log_message = (
+                "SYS: secure storage unavailable: the new API key was not saved. "
+                "config/api_keys.json may still contain a previously saved key. "
+                "Configure secure storage or explicitly allow plaintext fallback."
+            )
+            dialog_message = (
+                "L'archiviazione sicura non è disponibile e la nuova chiave non è stata salvata. "
+                "config/api_keys.json potrebbe contenere una chiave salvata in precedenza. "
+                "Configura l'archiviazione sicura oppure abilita esplicitamente il fallback "
+                "in chiaro impostando JARVIS_ALLOW_PLAINTEXT_KEY=1."
+            )
         self._log.append_log(
-            "SYS: WARNING - secure storage unavailable: the API key was written "
-            "in PLAIN TEXT to config/api_keys.json. Do not share that file."
+            log_message
         )
         QMessageBox.warning(
             self, "Chiave API non protetta",
-            "L'archiviazione sicura non è disponibile: la chiave API è stata salvata "
-            "IN CHIARO in config/api_keys.json.\n\nNon condividere quel file.",
+            dialog_message,
         )
 
     def _on_setup_done(self, key: str, os_name: str):
@@ -5869,6 +6272,26 @@ class JarvisUI:
     def viewer3d_hover(self) -> dict:
         """Part currently under the mouse in the 3D viewer ({'name','text'}, empty if none)."""
         return dict(self._win._viewer3d_hover_state)
+
+    def viewer3d_info(self) -> dict:
+        """Models loaded in the viewer ({id: {name, parts, nodes, animations}}) and the last page error."""
+        return {"models": dict(self._win._viewer3d_models), "active": self._win._viewer3d_active, "last_error": self._win._viewer3d_last_error}
+
+    def viewer3d_screenshot(self, timeout: float = 10.0) -> str:
+        """Ask the page for a PNG, wait for Python to save it, return the file path (tool thread)."""
+        import threading
+        win = self._win
+        shot = {"event": threading.Event(), "path": "", "error": ""}
+        win._viewer3d_shot = shot
+        try:
+            self.viewer3d_call("screenshot", [])
+            if not shot["event"].wait(timeout):
+                raise RuntimeError("the viewer did not answer in time")
+        finally:
+            win._viewer3d_shot = None
+        if shot["error"]:
+            raise RuntimeError(shot["error"])
+        return shot["path"]
 
     def panel_status(self) -> dict:
         win = self._win
@@ -6099,6 +6522,10 @@ class JarvisUI:
     def wait_for_api_key(self):
         while not self._win._ready:
             time.sleep(0.1)
+
+    def hide_content(self, prefix: str = "IMAGES"):
+        """Thread-safe: close the content panel if it is showing a result titled with prefix."""
+        self._win._content_hide_sig.emit(prefix)
 
     def show_content(self, title: str, text: str):
         """Thread-safe: display content in the panel below the HUD."""

@@ -80,6 +80,27 @@ class TaskRunner:
         self._go(run_id)
         return self.status_text()
 
+    def run_direct(self, tool: str, args: dict) -> str | None:
+        """Track an explicitly requested single write action without a second approval prompt."""
+        with self._lock:
+            if self.status in ("running", "awaiting_confirmation"):
+                return None
+            plan = self._normalise([{"tool": tool, "args": args}])
+            if plan[0]["risk"] != "write":
+                raise ValueError("direct task tracking only accepts write actions")
+            self._reset()
+            self.objective = f"Direct action: {tool}"
+            self.steps = plan
+            self.steps[0]["confirmed"] = True
+            self.status = "running"
+            self._run_id = uuid.uuid4().hex
+            run_id = self._run_id
+            self._save()
+
+        self._loop(run_id)
+        with self._lock:
+            return self.steps[0]["result"]
+
     def confirm(self) -> str:
         with self._lock:
             if self.status != "awaiting_confirmation":
@@ -121,6 +142,21 @@ class TaskRunner:
                 lines.append(f"Waiting for the user's OK before running {step['tool']} ({step['risk']}). "
                              "Ask them, then call task_runner_confirm (or task_runner_cancel).")
             return "\n".join(lines)
+
+    def snapshot(self) -> dict[str, int | str]:
+        """Return a small, lock-protected status summary for the HUD."""
+        with self._lock:
+            total = len(self.steps)
+            completed = sum(step["state"] == "done" for step in self.steps)
+            progress = 100 if self.status == "done" else (
+                round(completed * 100 / total) if total else 0
+            )
+            return {
+                "status": self.status,
+                "completed": completed,
+                "total": total,
+                "progress": progress,
+            }
 
     # ---- internals --------------------------------------------------
     def _normalise(self, plan) -> list[dict]:

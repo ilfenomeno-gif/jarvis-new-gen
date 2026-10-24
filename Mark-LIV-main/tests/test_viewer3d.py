@@ -108,6 +108,29 @@ def test_fly_to_and_recon_bring_viewer_to_front():
     assert win._hud_cam_stack.currentWidget() is win._viewer3d
 
 
+@needs_local_gpu_stack
+def test_real_page_model_events_restore_viewer_and_report_load_errors():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    jarvis = ui_module.JarvisUI("")
+    win = jarvis._win
+    win.show_viewer3d(False)
+    win._viewer3d_on_event("modelLoaded", {"id": "apple-test", "name": "apple.glb"})
+    app.processEvents()
+    assert win._hud_cam_stack.currentWidget() is win._viewer3d
+    assert win.hud._projection_status == "MODEL READY / APPLE-TEST"
+
+    win._viewer3d_on_event(
+        "commandError", {"command": "loadModel", "message": "model not found"}
+    )
+    assert win._hud_cam_stack.currentWidget() is win.hud
+    assert win.hud._projection_status.startswith("MODEL LOAD FAILED")
+
+    win._layout_timer.stop()
+    win.close()
 def test_parse_states_and_fetch_with_fake_opener():
     import io, json
     from core import viewer3d as v

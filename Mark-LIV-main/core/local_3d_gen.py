@@ -4,17 +4,23 @@ The heavy work runs in a subprocess (core/local_3d_worker.py): VRAM is released 
 exits, a crash cannot take JARVIS down, and out-of-memory becomes a clear message.
 TripoSR is image-to-3D only, so the prompt is first turned into a picture.
 Setup: see requirements-3d.txt and ``python -m core.local_3d_gen setup``.
+Backend fallback categories and per-stage timings are recorded in
+``logs/local_3d_gen.log`` without storing prompts or credentials.
 """
 from __future__ import annotations
 
 import hashlib
 import importlib.util
 import json
+import logging
 import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import uuid
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from core.model_gen import clean_prompt, model_name
@@ -28,6 +34,11 @@ SF3D_REPO = "https://github.com/Stability-AI/stable-fast-3d.git"
 MIN_VRAM_GB = 6.0
 DEFAULT_TIMEOUT = 1800.0
 RESULT_PREFIX = "JARVIS_RESULT "
+_LOG_PATH = BASE / "logs" / "local_3d_gen.log"
+_LOG_LOCK = threading.Lock()
+_LOGGER = logging.getLogger("jarvis.local_3d_gen")
+_LOGGER.setLevel(logging.INFO)
+_LOGGER.propagate = False
 
 SETUP_MESSAGE = (
     "Local 3D generation is not installed. Run 'python -m core.local_3d_gen setup', then "
@@ -37,6 +48,79 @@ OOM_MESSAGE = (
     "The GPU ran out of memory. Close other GPU programs (games, video editors, browsers "
     "with hardware acceleration) and retry, or use the Tripo backend."
 )
+
+
+def _log_event(event: str, **fields) -> None:
+    with _LOG_LOCK:
+        path = str(_LOG_PATH.resolve())
+        handler = next(
+            (
+                item for item in _LOGGER.handlers
+                if getattr(item, "_jarvis_3d_log", False)
+                and item.baseFilename == path
+            ),
+            None,
+        )
+        for item in tuple(_LOGGER.handlers):
+            if getattr(item, "_jarvis_3d_log", False) and item is not handler:
+                _LOGGER.removeHandler(item)
+                item.close()
+        if handler is None:
+            _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(
+                _LOG_PATH, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+            )
+            handler._jarvis_3d_log = True
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            _LOGGER.addHandler(handler)
+        _LOGGER.info("%s", json.dumps({"event": event, **fields}, sort_keys=True))
+
+
+def _failure_category(text: str) -> str:
+    lowered = text.lower()
+    if "out of memory" in lowered or "cuda oom" in lowered:
+        return "oom"
+    if "timeout" in lowered or "timed out" in lowered:
+        return "timeout"
+    if any(term in lowered for term in ("401", "403", "gated", "unauthorized", "token")):
+        return "model_access"
+    return "other"
+
+
+def _captured_text(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value if isinstance(value, str) else ""
+
+
+def _log_worker_diagnostics(stdout: str) -> None:
+    for line in (stdout or "").splitlines():
+        if line.startswith("TIMING "):
+            try:
+                item = json.loads(line[len("TIMING "):])
+                stage, seconds = item.get("stage"), item.get("seconds")
+                if isinstance(stage, str) and isinstance(seconds, (int, float)):
+                    _log_event("stage_complete", stage=stage[:60], seconds=round(seconds, 2))
+            except (AttributeError, json.JSONDecodeError, TypeError, ValueError):
+                _log_event("invalid_worker_timing")
+        elif line.startswith("BACKEND_FALLBACK "):
+            try:
+                item = json.loads(line[len("BACKEND_FALLBACK "):])
+                reason = str(item.get("reason") or "")
+                _log_event(
+                    "backend_fallback",
+                    source=str(item.get("from") or "")[:30],
+                    target=str(item.get("to") or "")[:30],
+                    error_type=reason.split(":", 1)[0][:80],
+                    category=_failure_category(reason),
+                )
+            except (AttributeError, json.JSONDecodeError, TypeError, ValueError):
+                _log_event("invalid_worker_fallback")
+        elif line.startswith("HALF_FALLBACK "):
+            _log_event(
+                "precision_fallback",
+                category=_failure_category(line[len("HALF_FALLBACK "):]),
+            )
 
 
 def python_exe() -> str:
@@ -54,9 +138,28 @@ def is_installed() -> bool:
     return importlib.util.find_spec("torch") is not None and (TRIPOSR_DIR / "tsr").is_dir()
 
 
+HF_SECRET_NAME = "hf_token"
+
+
+def hf_token(config_dir: Path | None = None, store=None) -> str:
+    """Hugging Face token: SecretStore first, then HF_TOKEN / HUGGING_FACE_HUB_TOKEN. Never raises."""
+    try:
+        if store is None:
+            from core.secret_store import SecretStore
+            base = Path(config_dir) if config_dir else BASE / "config"
+            store = SecretStore(base / "secrets.json")
+        value = store.get(HF_SECRET_NAME)
+    except Exception:
+        value = None
+    return value or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or ""
+
+
 def _run(cmd: list[str], timeout: float):
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "TRIPOSR_DIR": str(TRIPOSR_DIR), "SF3D_DIR": str(SF3D_DIR)}
+    token = hf_token()
+    if token:  # passed via the child's environment only, never argv
+        env["HF_TOKEN"] = token
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                           timeout=timeout, creationflags=flags, cwd=str(BASE), env=env)
     return proc.returncode, proc.stdout, proc.stderr
@@ -101,8 +204,21 @@ def readiness_problem(info: dict) -> str | None:
     return None
 
 
-def generate_local(prompt, models_dir: Path | None = None, runner=None,
-                   timeout: float = DEFAULT_TIMEOUT, image: Path | None = None) -> Path:
+_GEN_LOCK = threading.Lock()
+
+
+def generate_local(*args, **kwargs) -> Path:
+    """One generation at a time (the GPU cannot hold two). The lock is always released, even on timeout/crash."""
+    if not _GEN_LOCK.acquire(blocking=False):
+        raise RuntimeError("Another 3D generation is still running; wait for it to finish.")
+    try:
+        return _generate_local(*args, **kwargs)
+    finally:
+        _GEN_LOCK.release()
+
+
+def _generate_local(prompt, models_dir: Path | None = None, runner=None,
+                    timeout: float = DEFAULT_TIMEOUT, image: Path | None = None) -> Path:
     """Blocking: run in a worker thread. Returns the saved .glb path.
 
     With ``image`` (a sanitised PNG from core.image_input) the SD-Turbo stage is skipped and
@@ -122,19 +238,57 @@ def generate_local(prompt, models_dir: Path | None = None, runner=None,
     try:
         cmd = [python_exe(), "-m", "core.local_3d_worker", "--out", str(out_file)]
         cmd += ["--image", str(image)] if image else ["--prompt", prompt]
+        started = time.monotonic()
+        _log_event(
+            "generation_started",
+            backend=os.environ.get("JARVIS_3D_BACKEND", "sf3d").lower(),
+            timeout_seconds=timeout,
+        )
         try:
             code, stdout, stderr = runner(cmd, timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            _log_worker_diagnostics(_captured_text(exc.stdout))
+            _log_event(
+                "generation_failed",
+                category="timeout",
+                elapsed_seconds=round(time.monotonic() - started, 2),
+            )
             raise RuntimeError("Local 3D generation timed out (the first run downloads several GB "
                                "of models; retry once they are cached).") from None
+        elapsed = round(time.monotonic() - started, 2)
+        stdout = _captured_text(stdout)
+        stderr = _captured_text(stderr)
+        _log_worker_diagnostics(stdout)
         result = _parse_result(stdout)
         if result is None:
-            tail = " ".join((stderr or "").strip().splitlines()[-2:])[:300]
-            if "out of memory" in (stderr or "").lower():
+            combined_output = f"{stdout}\n{stderr}"
+            _log_event(
+                "generation_failed",
+                category=_failure_category(combined_output),
+                elapsed_seconds=elapsed,
+                exit_code=code,
+            )
+            tail = " ".join(combined_output.strip().splitlines()[-2:])[:300]
+            if _failure_category(combined_output) == "oom":
                 raise RuntimeError(OOM_MESSAGE)
             raise RuntimeError(f"Local generator crashed (exit {code}): {tail or 'no output'}")
         if not result.get("ok"):
-            if result.get("code") == "oom":
+            failure_code = str(result.get("code") or "")
+            failure_reason = " ".join(
+                str(result.get(key) or "") for key in ("message", "code")
+            )
+            _log_event(
+                "generation_failed",
+                category=(
+                    "oom"
+                    if failure_code.lower() == "oom"
+                    else _failure_category(failure_reason)
+                ),
+                elapsed_seconds=elapsed,
+                exit_code=code,
+                result_code=failure_code[:40] or "unknown",
+            )
+            if failure_code == "oom":
                 raise RuntimeError(OOM_MESSAGE)
             raise RuntimeError(f"Local generation failed: {result.get('message', 'unknown error')}")
         if not out_file.is_file():
@@ -147,6 +301,12 @@ def generate_local(prompt, models_dir: Path | None = None, runner=None,
         digest = hashlib.sha1(Path(image).read_bytes()).hexdigest() if image else ""
         target = models_dir / model_name(prompt + digest)
         shutil.move(str(out_file), target)
+        _log_event(
+            "generation_completed",
+            backend=str(result.get("backend") or "unknown")[:30],
+            elapsed_seconds=elapsed,
+            output_bytes=target.stat().st_size,
+        )
         return target
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

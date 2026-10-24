@@ -24,6 +24,9 @@ TOOL = {
     "description": (
         "Plans and runs a multi-step request on its own, e.g. 'disassemble the PC and explain the CPU' "
         "(load_model, explode_model, highlight_part) or 'search a Ferrari, make it 3D, show it realistic'. "
+        "For one explicit action, such as creating one requested 3D model, call that action directly instead; "
+        "it is tracked as a single task without a second confirmation. Multi-step plans pause write steps "
+        "for confirmation. "
         "Read-only steps (viewer_3d: highlight, rotate, explode) run back to back without asking. "
         "A write/destructive step (search_3d_model, generate_3d_model) pauses: ask the user, then call "
         "task_runner_confirm. Pass 'steps' to choose the tools yourself, otherwise known objectives are planned "

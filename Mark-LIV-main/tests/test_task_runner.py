@@ -86,6 +86,107 @@ def test_plan_for_unknown_objective_is_empty():
     assert plan_for("che ore sono") == []
 
 
+def test_snapshot_reports_real_progress_for_idle_waiting_and_done_tasks():
+    r = runner([])
+    assert r.snapshot() == {
+        "status": "idle", "completed": 0, "total": 0, "progress": 0,
+    }
+    r.start("x", [{"tool": "search_3d_model", "args": {"query": "q"}}])
+    assert r.snapshot() == {
+        "status": "awaiting_confirmation", "completed": 0, "total": 1, "progress": 0,
+    }
+    r.confirm()
+    assert r.snapshot() == {
+        "status": "done", "completed": 1, "total": 1, "progress": 100,
+    }
+
+
+def test_direct_write_action_is_tracked_and_completes_without_confirmation():
+    log = []
+    r = runner(log)
+
+    result = r.run_direct("generate_3d_model", {"prompt": "a shiny red apple"})
+
+    assert result == "generate_3d_model ok"
+    assert log == [("generate_3d_model", {"prompt": "a shiny red apple"})]
+    assert r.snapshot() == {
+        "status": "done", "completed": 1, "total": 1, "progress": 100,
+    }
+
+
+def test_direct_write_action_does_not_replace_an_active_plan():
+    log = []
+    r = runner(log)
+    r.start("x", [{"tool": "search_3d_model", "args": {"query": "q"}}])
+
+    assert r.run_direct("generate_3d_model", {"prompt": "apple"}) is None
+    assert r.status == "awaiting_confirmation" and log == []
+
+
+def test_live_tool_dispatch_tracks_single_generation_without_confirmation(monkeypatch, tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+
+    import main
+    from core import task_runner as task_runner_module
+    from core.action_loader import ActionRecord
+
+    calls = []
+
+    def generate(parameters, player=None):
+        calls.append((parameters, player))
+        return "Model generated and shown."
+
+    registry = ActionRegistry(
+        {
+            "generate_3d_model": ActionRecord(
+                name="generate_3d_model",
+                description="Generate a model",
+                parameters={"type": "OBJECT"},
+                handler=generate,
+                valid=True,
+                risk_class="write",
+            )
+        },
+        lambda _message: None,
+    )
+
+    class Ui:
+        muted = False
+
+        def set_state(self, _state):
+            pass
+
+    ui = Ui()
+    r = TaskRunner(
+        registry,
+        lambda: {"player": ui},
+        run_async=False,
+        checkpoint_path=tmp_path / "task.json",
+    )
+    monkeypatch.setattr(task_runner_module, "get_runner", lambda: r)
+    monkeypatch.setattr(main, "require_policy_file", lambda: None)
+    monkeypatch.setattr(main, "route_tool", lambda *_args: None)
+    jarvis = object.__new__(main.JarvisLive)
+    jarvis.ui = ui
+    jarvis._last_user_text = "crea una mela"
+    jarvis.speak = lambda _text: None
+    jarvis._action_registry = registry
+    call = SimpleNamespace(
+        id="generation-test",
+        name="generate_3d_model",
+        args={"prompt": "a shiny red apple"},
+    )
+
+    response = asyncio.run(jarvis._execute_tool(call))
+
+    assert response.response["result"] == "Model generated and shown."
+    assert calls == [({"prompt": "a shiny red apple"}, ui)]
+    assert r.snapshot() == {
+        "status": "done", "completed": 1, "total": 1, "progress": 100,
+    }
+
+
 def test_action_files_expose_the_four_tools():
     from pathlib import Path
     from core.action_loader import discover_actions

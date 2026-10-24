@@ -3,7 +3,49 @@
 Backend: local GPU (core/local_3d_gen.py) or Tripo3D (consumes credits), chosen by
 model_gen.backend(). Writes one .glb into assets/viewer3d/models/.
 """
+import re
+import time
+
 from core import model_gen
+
+
+def _scene_args(params: dict, path, label: str = ""):
+    """(model_id, scale) when the model must be ADDED to the scene instead of replacing it."""
+    model_id = re.sub(r"[^A-Za-z0-9_-]", "-", str(params.get("model_id") or "").strip())[:40]
+    raw_scale = params.get("scale")
+    scale = None
+    if raw_scale not in (None, ""):
+        try:
+            scale = min(3.0, max(0.02, float(raw_scale)))
+        except (TypeError, ValueError):
+            scale = None
+    if not model_id and scale is None:
+        return "", None
+    if not model_id:
+        base = re.sub(r"[^A-Za-z0-9]+", "-", label or path.stem).strip("-").lower()[:24] or "model"
+        model_id = f"{base}-{int(time.time())}"
+    return model_id, scale
+
+
+def _close_search_panel(player) -> None:
+    """The image-search results panel has done its job once the model is loaded."""
+    if player is not None and hasattr(player, "hide_content"):
+        try:
+            player.hide_content("IMAGES")
+        except Exception:
+            pass
+
+
+def _load_in_scene(player, path, model_id: str, scale, params=None) -> None:
+    # A scene has ONE look: inherit the current one, change it only on an explicit style.
+    style = str((params or {}).get("style") or "").lower()
+    if style in _IMAGE_STYLES:
+        player.viewer3d_call("setMaterialStyle", [style])
+    args = [path.name, model_id]
+    if scale is not None:
+        args += [None, scale]
+    player.viewer3d_call("loadModel", args)
+    _close_search_panel(player)
 
 
 def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
@@ -47,11 +89,16 @@ def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
         engine_name = "local" if use_local else "Tripo"
         return f"3D generation failed ({engine_name} engine): {exc}"
     if player is not None and hasattr(player, "viewer3d_call") and params.get("show", True) is not False:
+        model_id, scale = _scene_args(params, path, prompt)
+        if model_id:
+            _load_in_scene(player, path, model_id, scale, params)
+            return _scene_message(path, model_id, scale)
         if use_local:
             # TripoSR textures are blurry: show generated models as a clean solid blueprint.
             # The user can ask for "texture originali" (realistic) afterwards.
             player.viewer3d_call("setMaterialStyle", ["blueprint"])
         player.viewer3d_call("loadModel", [path.name])
+        _close_search_panel(player)
         if use_local:
             return (f"Model '{path.name}' generated and shown in blueprint style (clean solid look; "
                     "say 'texture originali' for the realistic material). Drag with the mouse to rotate.")
@@ -59,11 +106,23 @@ def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
     return f"Model '{path.name}' generated and saved."
 
 
+def _scene_message(path, model_id: str, scale) -> str:
+    size = f" at scale {scale:g}" if scale is not None else ""
+    return (f"Model '{path.name}' generated and ADDED to the scene with id '{model_id}'{size}, next to the "
+            "existing models (nothing was replaced); it inherits the scene's current material style. Use viewer_3d "
+            "set_material_style to change the look of the whole scene.")
+
+
 def _show_local(player, params, path, style: str = "blueprint", note: str = "") -> str:
     if player is not None and hasattr(player, "viewer3d_call") and params.get("show", True) is not False:
+        model_id, scale = _scene_args(params, path, str(params.get("prompt") or ""))
+        if model_id:
+            _load_in_scene(player, path, model_id, scale, params)
+            return note + _scene_message(path, model_id, scale)
         # TripoSR textures are blurry: show generated models as a clean solid blueprint.
         player.viewer3d_call("setMaterialStyle", [style])
         player.viewer3d_call("loadModel", [path.name])
+        _close_search_panel(player)
         return (f"{note}Model '{path.name}' generated from the image and shown in {style} style (say "
                 "'texture originali' for the realistic material). Drag with the mouse to rotate.")
     return f"{note}Model '{path.name}' generated from the image and saved."
@@ -122,8 +181,13 @@ TOOL = {
         "with API credits; takes up to a few minutes) and shows it as a hologram in the central display. Use when "
         "the user asks to create, build or show something in 3D, e.g. 'make a hologram "
         "of a jet engine'. Also turns a picture into a hologram (image_path for a local file, "
-        "image_url for a web image): faster, no text-to-image step. Afterwards viewer_3d can explode_model, highlight_part or "
-        "clear_model."
+        "image_url for a web image): faster, no text-to-image step. Afterwards viewer_3d can explode_model, "
+        "highlight_part or clear_model. Call this directly for one explicit model request; it is tracked as a "
+        "single task without a second confirmation. Use task_runner_start for multi-step plans, where write steps "
+        "pause for confirmation. "
+        "To ADD an object to a scene that is already shown (e.g. 'carica il PC e aggiungi una mela') "
+        "pass model_id and a small scale (0.1-0.3): the old models stay, the new one is placed next to them and "
+        "takes the scene's current style (style is optional and, if given, restyles the whole scene)."
     ),
     "risk_class": "write",
     "parameters": {
@@ -132,7 +196,9 @@ TOOL = {
             "prompt": {"type": "STRING", "description": "What to create, ideally in English (the image models understand it best), e.g. 'a wooden chair'. Max 300 characters. With image_path/image_url it is optional (just a name for the model)."},
             "image_path": {"type": "STRING", "description": "Image-to-3D: path of a local picture (png/jpg/webp) to turn into a 3D hologram, skipping the text-to-image step (faster). Local generator only."},
             "image_url": {"type": "STRING", "description": "Image-to-3D: direct http(s) link to a picture (e.g. an image found with web search) to turn into a 3D hologram. Use instead of image_path for web images."},
-            "style": {"type": "STRING", "enum": ["blueprint", "realistic", "toon", "flat"], "description": "Image-to-3D only. Omit it: 2D drawings (anime, logos, comics) are detected automatically and shown in toon, photos in blueprint."},
+            "style": {"type": "STRING", "enum": ["blueprint", "realistic", "toon", "flat"], "description": "Omit it when adding to a scene (the new model inherits the scene style; an explicit style restyles the whole scene). Image-to-3D standalone: 2D drawings (anime, logos, comics) are detected automatically and shown in toon, photos in blueprint."},
+            "model_id": {"type": "STRING", "description": "Add the generated model to the CURRENT scene instead of replacing it: it is placed next to the existing models on the floor. Use e.g. 'mela' when the user asks to add an object to a scene."},
+            "scale": {"type": "NUMBER", "description": "Size relative to the default (1). Use 0.1-0.3 for small objects (apple, cup, phone) added next to big ones such as the PC. Setting it also adds the model to the scene (an id is made up if model_id is missing)."},
             "show": {"type": "BOOLEAN", "description": "Show it right away (default true)."},
             "engine": {
                 "type": "STRING",

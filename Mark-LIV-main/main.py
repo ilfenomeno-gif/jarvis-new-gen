@@ -984,7 +984,28 @@ class JarvisLive:
             daemon=True,
         ).start()
         self.ui.get_plugins = self._plugin_registry.list_for_ui
+        self.ui.get_hud_runtime = self._hud_runtime_snapshot
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
+
+    def _hud_runtime_snapshot(self) -> dict:
+        from core.jarvis_runtime import get_runtime
+        from core import task_runner
+
+        skills = get_runtime().skills.view()
+        runner = task_runner.get_runner()
+        task = runner.snapshot() if runner else {
+            "status": "idle",
+            "completed": 0,
+            "total": 0,
+            "progress": 0,
+        }
+        return {
+            "skills": {
+                "active": sum(item["status"] == "active" for item in skills),
+                "total": len(skills),
+            },
+            "task": task,
+        }
 
     def accessibility_speak(self, text: str) -> None:
         """Speak a short accessibility status through JARVIS's active session."""
@@ -1424,19 +1445,27 @@ class JarvisLive:
 
         try:
             if self._action_registry.has(name):
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: self._action_registry.run(
+                def run_action():
+                    ctx = {
+                        "player": self.ui,
+                        "speak": self.speak,
+                        "response": None,
+                        "session_memory": None,
+                    }
+                    if name == "generate_3d_model":
+                        from core import task_runner
+
+                        runner = task_runner.get_runner()
+                        if runner:
+                            tracked_result = runner.run_direct(name, args)
+                            if tracked_result is not None:
+                                return tracked_result
+                    return self._action_registry.run(
                         name,
                         args,
-                        ctx={
-                            "player": self.ui,
-                            "speak": self.speak,
-                            "response": None,
-                            "session_memory": None,
-                        },
-                    ),
-                )
+                        ctx=ctx,
+                    )
+                result = await loop.run_in_executor(None, run_action)
 
             elif name == "recall_memory":
                 # Local file search: no network, no second model. Kept out of
