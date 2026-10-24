@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import shutil
@@ -34,6 +35,9 @@ KEY_MISSING_MESSAGE = (
 BACKENDS = ("auto", "local", "tripo")
 BACKEND_ENV = "JARVIS_3D_BACKEND"
 CONFIG_NAME = "model_gen.json"
+TRIPO_PREFLIGHT_TIMEOUT = 4.0
+
+_LOG = logging.getLogger(__name__)
 
 
 def _config_path(config_dir: Path | None) -> Path:
@@ -65,6 +69,85 @@ def set_backend(value: str, config_dir: Path | None = None) -> str:
 
 def tripo_available() -> bool:
     return importlib.util.find_spec("tripo3d") is not None
+
+
+async def _read_tripo_balance(key: str):
+    import tripo3d
+
+    async with tripo3d.TripoClient(api_key=key) as client:
+        get_balance = getattr(client, "get_balance", None)
+        if not callable(get_balance):
+            return None
+        return await get_balance()
+
+
+def is_backend_available(backend: str) -> tuple[bool, str]:
+    """Check backend prerequisites; the Tripo balance read never creates a task."""
+    name = str(backend or "").strip().lower()
+    if name == "tripo":
+        key = tripo_key()
+        if not key:
+            return False, "no key"
+        if not tripo_available():
+            return False, "Tripo SDK unavailable"
+        try:
+            balance = asyncio.run(
+                asyncio.wait_for(_read_tripo_balance(key), timeout=TRIPO_PREFLIGHT_TIMEOUT)
+            )
+        except AttributeError:
+            return True, "unverified: balance check unsupported by installed Tripo SDK"
+        except (asyncio.TimeoutError, TimeoutError):
+            return False, "Tripo balance check timed out"
+        except Exception as exc:
+            _LOG.info("Tripo balance preflight failed (%s)", type(exc).__name__)
+            return False, f"Tripo balance check failed ({type(exc).__name__})"
+        if balance is None:
+            return True, "unverified: balance check unsupported by installed Tripo SDK"
+        try:
+            available_balance = float(balance.balance)
+        except (AttributeError, TypeError, ValueError):
+            return True, "unverified: Tripo balance response was not interpretable"
+        if available_balance <= 0:
+            return False, "no credits"
+        return True, "available"
+
+    if name == "local":
+        from core import local_3d_gen, local_3d_worker
+
+        try:
+            if not local_3d_gen.is_installed():
+                return False, local_3d_gen.SETUP_MESSAGE
+            missing = local_3d_worker._missing_modules()
+            if missing:
+                return False, "Local 3D generation is missing: " + ", ".join(missing)
+            if local_3d_gen.configured_backend() == "sf3d" and not local_3d_worker.sf3d_ready():
+                return False, "Stable Fast 3D is not installed or its extensions are unavailable"
+        except Exception as exc:
+            _LOG.info("Local backend preflight failed (%s)", type(exc).__name__)
+            return False, f"Local backend check failed ({type(exc).__name__})"
+        return True, "available"
+
+    return False, "backend must be one of: tripo, local"
+
+
+def is_credit_error(error: BaseException) -> bool:
+    """Identify provider errors that specifically indicate exhausted/insufficient credits."""
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "insufficient credit",
+            "not enough credit",
+            "no credits",
+            "insufficient balance",
+            "balance not enough",
+            "quota exceeded",
+            "quota exhausted",
+            "payment required",
+            "http 402",
+            "status_code=402",
+        )
+    )
 
 
 def tripo_key(config_dir: Path | None = None, store=None) -> str:

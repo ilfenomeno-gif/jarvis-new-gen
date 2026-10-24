@@ -192,6 +192,7 @@ def test_tool_routes_to_local(monkeypatch, tmp_path):
 
     monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "local")
     monkeypatch.setattr(model_gen, "tripo_available", lambda: False)
+    monkeypatch.setattr(model_gen, "is_backend_available", lambda backend: (True, "available"))
     monkeypatch.setattr(gen, "generate_local", lambda prompt: tmp_path / "chair.glb")
     out = tool.generate_3d_model({"prompt": "a simple chair"}, player=P())
     assert "blueprint" in out
@@ -229,6 +230,7 @@ def test_local_action_passes_hud_progress_and_fallback_callbacks(monkeypatch, tm
     player = Player()
     monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "local")
     monkeypatch.setattr(model_gen, "tripo_available", lambda: False)
+    monkeypatch.setattr(model_gen, "is_backend_available", lambda backend: (True, "available"))
     monkeypatch.setattr(gen, "configured_backend", lambda: "sf3d")
 
     def fake_generate(prompt, **kwargs):
@@ -254,6 +256,11 @@ def test_tool_auto_prefers_tripo_key_then_local_then_message(monkeypatch, tmp_pa
     monkeypatch.setattr(gen, "generate_local", lambda p: used.append("local") or tmp_path / "b.glb")
 
     monkeypatch.setattr(model_gen, "tripo_key", lambda *a, **k: "k")
+    def availability(backend):
+        if backend == "tripo":
+            return bool(model_gen.tripo_key()), "available" if model_gen.tripo_key() else "no key"
+        return gen.is_installed(), "available" if gen.is_installed() else gen.SETUP_MESSAGE
+    monkeypatch.setattr(model_gen, "is_backend_available", availability)
     tool.generate_3d_model({"prompt": "a car"})
     monkeypatch.setattr(model_gen, "tripo_key", lambda *a, **k: "")
     monkeypatch.setattr(gen, "is_installed", lambda: True)
@@ -269,6 +276,7 @@ def test_engine_param_overrides_config_and_never_touches_tripo(monkeypatch, tmp_
     monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "tripo")
     monkeypatch.setattr(model_gen, "tripo_available", lambda: True)
     monkeypatch.setattr(model_gen, "tripo_key", lambda *a, **k: "key")
+    monkeypatch.setattr(model_gen, "is_backend_available", lambda backend: (True, "available"))
 
     def no_tripo(*a, **k):
         raise AssertionError("Tripo must not be contacted when engine='local'")
@@ -289,6 +297,7 @@ def test_engine_param_overrides_config_and_never_touches_tripo(monkeypatch, tmp_
 
 def test_local_errors_are_reported_verbatim(monkeypatch):
     monkeypatch.setattr(model_gen, "tripo_available", lambda: False)
+    monkeypatch.setattr(model_gen, "is_backend_available", lambda backend: (True, "available"))
     for raised, expected in [
         (RuntimeError(gen.OOM_MESSAGE), "out of memory"),
         (RuntimeError("Local 3D generation timed out (x)"), "timed out"),

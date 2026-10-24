@@ -11,8 +11,8 @@ risk_class: write
 status: active
 ---
 # Procedura
-1. Per un oggetto nuovo chiama `generate_3d_model` con `prompt` breve e descrittivo. Col generatore locale (GPU) è gratis e richiede circa un minuto; con Tripo consuma crediti: avvisa l'utente.
-   Se la generazione con Tripo fallisce per crediti, o se l'utente chiede di usare il generatore locale, richiama immediatamente il tool `generate_3d_model` impostando `engine='local'` (senza chiedere conferma e senza riprovare con Tripo). Riporta all'utente l'errore esatto se anche il locale fallisce.
+1. Per un oggetto nuovo chiama `generate_3d_model` con `prompt` breve e descrittivo. Il tool controlla prima la chiave e il saldo Tripo; se l'API non è disponibile o non ha crediti, usa direttamente il generatore locale senza chiedere conferma. Se il saldo non è verificabile, tenta Tripo una volta e passa al locale nello stesso invio se il provider segnala crediti insufficienti. Tripo consuma crediti; il generatore locale usa la GPU e può richiedere più tempo.
+   Non richiamare il tool una seconda volta per attivare il fallback. Riporta all'utente l'errore esatto se anche il locale fallisce.
 2. Il modello viene caricato da solo come ologramma; non serve altro `show`.
 3. "Smontalo": `viewer_3d` con `mode=explode_model` e `on=true` (`on=false` per ricomporre).
 4. "Evidenzia X": `viewer_3d` con `mode=highlight_part` e `part=X`.

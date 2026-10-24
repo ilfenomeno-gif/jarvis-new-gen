@@ -63,9 +63,19 @@ def test_prompt_validation():
 def test_tool_messages_without_sdk_or_key(monkeypatch):
     monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "tripo")
     monkeypatch.setattr(model_gen, "tripo_available", lambda: False)
+    monkeypatch.setattr(
+        model_gen, "is_backend_available",
+        lambda backend: (False, "Tripo SDK unavailable")
+        if backend == "tripo" else (False, "local generator unavailable"),
+    )
     assert "pip install" in tool.generate_3d_model({"prompt": "a car"})
     monkeypatch.setattr(model_gen, "tripo_available", lambda: True)
     monkeypatch.setattr(model_gen, "tripo_key", lambda *a, **k: "")
+    monkeypatch.setattr(
+        model_gen, "is_backend_available",
+        lambda backend: (False, "no key")
+        if backend == "tripo" else (False, "local generator unavailable"),
+    )
     assert "set-tripo-key" in tool.generate_3d_model({"prompt": "a car"})
     assert "Invalid" in tool.generate_3d_model({"prompt": ""})
 
@@ -101,6 +111,7 @@ def test_tool_generates_and_loads(monkeypatch, tmp_path):
         def viewer3d_call(self, f, a): calls.append((f, a))
     monkeypatch.setattr(model_gen, "tripo_available", lambda: True)
     monkeypatch.setattr(model_gen, "tripo_key", lambda *a, **k: "secret")
+    monkeypatch.setattr(model_gen, "is_backend_available", lambda backend: (True, "available"))
     monkeypatch.setattr(model_gen, "MODELS_DIR", tmp_path)
     real = model_gen.generate_model
     monkeypatch.setattr(model_gen, "generate_model",

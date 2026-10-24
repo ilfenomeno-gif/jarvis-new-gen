@@ -3,10 +3,13 @@
 Backend: local GPU (core/local_3d_gen.py) or Tripo3D (consumes credits), chosen by
 model_gen.backend(). Writes one .glb into assets/viewer3d/models/.
 """
+import logging
 import re
 import time
 
 from core import model_gen
+
+_LOG = logging.getLogger(__name__)
 
 
 def _scene_args(params: dict, path, label: str = ""):
@@ -82,30 +85,59 @@ def _generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
         choice = str(engine).lower()
     else:
         return f"Invalid request: engine must be one of {', '.join(model_gen.BACKENDS)}"
-    key = model_gen.tripo_key() if model_gen.tripo_available() else ""
-    use_local = choice == "local" or (choice == "auto" and not key and local_3d_gen.is_installed())
+    use_local = choice == "local"
+    fallback_reason = ""
+    if not use_local:
+        tripo_ready, tripo_reason = model_gen.is_backend_available("tripo")
+        if tripo_ready:
+            if tripo_reason.startswith("unverified:"):
+                _LOG.info("Tripo preflight unverified; trying remote generation once")
+        else:
+            use_local = True
+            fallback_reason = tripo_reason
+            _LOG.warning(
+                "Tripo non disponibile: uso %s locale (%s)",
+                _local_backend_label(local_3d_gen),
+                tripo_reason,
+            )
     try:
         if use_local:
-            backend = local_3d_gen.configured_backend()
-            _set_generation_status(player, "SF3D" if backend == "sf3d" else "TripoSR")
-            try:
-                options = _generation_callbacks(player)
-                path = local_3d_gen.generate_local(prompt, **options)
-            except RuntimeError:
-                raise
-            except Exception as exc:
-                raise RuntimeError(f"{type(exc).__name__}: {exc}") from None
-        elif choice == "tripo" or key:
-            _set_generation_status(player, "Tripo3D")
-            if not model_gen.tripo_available():
-                return model_gen.SDK_MISSING_MESSAGE
-            if not key:
-                return model_gen.KEY_MISSING_MESSAGE
-            path = model_gen.generate_model(prompt, key)
+            local_ready, local_reason = model_gen.is_backend_available("local")
+            if not local_ready:
+                if fallback_reason:
+                    tripo_message = _tripo_unavailable_message(tripo_reason)
+                    return (
+                        f"{tripo_message} Local fallback unavailable: {local_reason}"
+                    )
+                return f"3D generation failed (local engine): {local_reason}"
+            path = _generate_local(prompt, player, local_3d_gen)
         else:
-            return (model_gen.KEY_MISSING_MESSAGE + " Or install the free local generator: "
-                    + local_3d_gen.SETUP_MESSAGE)
+            _set_generation_status(player, "Tripo3D")
+            key = model_gen.tripo_key()
+            try:
+                path = model_gen.generate_model(prompt, key)
+            except RuntimeError as exc:
+                if not model_gen.is_credit_error(exc):
+                    raise
+                fallback_reason = "Tripo credits unavailable"
+                local_ready, local_reason = model_gen.is_backend_available("local")
+                if not local_ready:
+                    return (
+                        "3D generation failed (Tripo credits unavailable); "
+                        f"local fallback unavailable: {local_reason}"
+                    )
+                _LOG.warning(
+                    "Tripo non disponibile: uso %s locale (crediti insufficienti)",
+                    _local_backend_label(local_3d_gen),
+                )
+                use_local = True
+                path = _generate_local(prompt, player, local_3d_gen)
     except RuntimeError as exc:
+        if fallback_reason:
+            return (
+                f"3D generation failed (local fallback after Tripo issue: "
+                f"{fallback_reason}): {exc}"
+            )
         engine_name = "local" if use_local else "Tripo"
         return f"3D generation failed ({engine_name} engine): {exc}"
     if player is not None and hasattr(player, "viewer3d_call") and params.get("show", True) is not False:
@@ -148,6 +180,28 @@ def _generation_callbacks(player) -> dict:
     if callable(fallback):
         callbacks["fallback_callback"] = fallback
     return callbacks
+
+
+def _local_backend_label(local_3d_gen) -> str:
+    return "SF3D" if local_3d_gen.configured_backend() == "sf3d" else "TripoSR"
+
+
+def _tripo_unavailable_message(reason: str) -> str:
+    if reason == "no key":
+        return model_gen.KEY_MISSING_MESSAGE
+    if reason == "Tripo SDK unavailable":
+        return model_gen.SDK_MISSING_MESSAGE
+    return f"Tripo unavailable: {reason}."
+
+
+def _generate_local(prompt, player, local_3d_gen):
+    _set_generation_status(player, _local_backend_label(local_3d_gen))
+    try:
+        return local_3d_gen.generate_local(prompt, **_generation_callbacks(player))
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"{type(exc).__name__}: {exc}") from None
 
 
 def _show_local(player, params, path, style: str = "blueprint", note: str = "") -> str:
@@ -219,7 +273,8 @@ TOOL = {
     "name": "generate_3d_model",
     "description": (
         "Creates a 3D model from a text description (default: local TripoSR GPU generator; optional Tripo3D "
-        "API with credits; may take a few minutes) and shows it as a hologram in the central display. Use when "
+        "API with credits; balance is checked before generation and an unavailable/credit-exhausted API "
+        "automatically falls back to the local generator) and shows it as a hologram in the central display. Use when "
         "the user asks to create, build or show something in 3D, e.g. 'make a hologram "
         "of a jet engine'. Also turns a picture into a hologram (image_path for a local file, "
         "image_url for a web image): faster, no text-to-image step. Afterwards viewer_3d can explode_model, "
@@ -245,10 +300,10 @@ TOOL = {
                 "type": "STRING",
                 "enum": ["auto", "local", "tripo"],
                 "description": (
-                    "Forces the generator for this call only. Use 'local' (free, GPU) when the "
-                    "user asks for the local generator or Tripo failed (e.g. no credits); "
-                    "'tripo' for the paid API; omit for the default (local TripoSR). SF3D can be "
-                    "selected with JARVIS_3D_BACKEND=sf3d."
+                    "Selects a preferred generator for this call only. 'local' uses the free GPU backend; "
+                    "'tripo' prefers the paid API but automatically falls back to local if unavailable or "
+                    "out of credits; omit to use the configured default. SF3D can be selected with "
+                    "JARVIS_3D_BACKEND=sf3d."
                 ),
             },
         },
