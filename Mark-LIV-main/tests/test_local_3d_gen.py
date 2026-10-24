@@ -168,7 +168,11 @@ def test_python_exe_avoids_pythonw(tmp_path, monkeypatch):
 
 def test_backend_config(tmp_path, monkeypatch):
     monkeypatch.delenv(model_gen.BACKEND_ENV, raising=False)
-    assert model_gen.backend(tmp_path) == "auto"
+    assert model_gen.backend(tmp_path) == "local"
+    monkeypatch.setenv(model_gen.BACKEND_ENV, "sf3d")
+    assert model_gen.backend(tmp_path) == "local"
+    monkeypatch.setenv(model_gen.BACKEND_ENV, "triposr")
+    assert model_gen.backend(tmp_path) == "local"
     model_gen.set_backend("local", tmp_path)
     assert model_gen.backend(tmp_path) == "local"
     monkeypatch.setenv(model_gen.BACKEND_ENV, "tripo")
@@ -197,6 +201,49 @@ def test_tool_routes_to_local(monkeypatch, tmp_path):
         raise RuntimeError(gen.OOM_MESSAGE)
     monkeypatch.setattr(gen, "generate_local", boom)
     assert "out of memory" in tool.generate_3d_model({"prompt": "a chair"}, player=P())
+
+
+def test_local_action_passes_hud_progress_and_fallback_callbacks(monkeypatch, tmp_path):
+    received = {}
+
+    class Player:
+        def __init__(self):
+            self.states = []
+            self.statuses = []
+
+        def set_jarvis_state(self, state):
+            self.states.append(state)
+
+        def set_generation_status(self, backend):
+            self.statuses.append(backend)
+
+        def update_generation_progress(self, elapsed):
+            return elapsed
+
+        def request_triposr_fallback(self):
+            return True
+
+        def viewer3d_call(self, function, args):
+            pass
+
+    player = Player()
+    monkeypatch.setattr(model_gen, "backend", lambda *a, **k: "local")
+    monkeypatch.setattr(model_gen, "tripo_available", lambda: False)
+    monkeypatch.setattr(gen, "configured_backend", lambda: "sf3d")
+
+    def fake_generate(prompt, **kwargs):
+        received.update(kwargs)
+        return tmp_path / "apple.glb"
+
+    monkeypatch.setattr(gen, "generate_local", fake_generate)
+    result = tool.generate_3d_model(
+        {"prompt": "an apple", "engine": "local"}, player=player
+    )
+    assert "generated and shown" in result
+    assert callable(received["progress_callback"])
+    assert callable(received["fallback_callback"])
+    assert player.states == ["generating_3d", "listening"]
+    assert player.statuses == ["Preparazione", "SF3D", ""]
 
 
 def test_tool_auto_prefers_tripo_key_then_local_then_message(monkeypatch, tmp_path):
@@ -266,14 +313,14 @@ def test_worker_perf_defaults(monkeypatch):
         assert '"JARVIS_3D_REMBG", "isnet-general-use"' in f.read()
 
 
-def test_backend_selection_defaults_to_sf3d(monkeypatch):
+def test_backend_selection_defaults_to_triposr(monkeypatch):
     from core import local_3d_worker as worker
     monkeypatch.delenv("JARVIS_3D_BACKEND", raising=False)
-    assert worker.backend() == "sf3d"
+    assert worker.backend() == "triposr"
     monkeypatch.setenv("JARVIS_3D_BACKEND", "TripoSR")
     assert worker.backend() == "triposr"
     monkeypatch.setenv("JARVIS_3D_BACKEND", "nonsense")
-    assert worker.backend() == "sf3d"
+    assert worker.backend() == "triposr"
 
 
 def _stub_backends(monkeypatch, worker, sf3d_error=None):
@@ -294,7 +341,7 @@ def _stub_backends(monkeypatch, worker, sf3d_error=None):
 
 def test_sf3d_is_used_when_it_works(monkeypatch):
     from core import local_3d_worker as worker
-    monkeypatch.delenv("JARVIS_3D_BACKEND", raising=False)
+    monkeypatch.setenv("JARVIS_3D_BACKEND", "sf3d")
     calls = _stub_backends(monkeypatch, worker)
     assert worker._build_mesh([object()], None, True) == ("sf3d-mesh", "sf3d", True)
     assert calls == ["sf3d"]
@@ -302,7 +349,7 @@ def test_sf3d_is_used_when_it_works(monkeypatch):
 
 def test_sf3d_failure_falls_back_to_triposr(monkeypatch, capsys):
     from core import local_3d_worker as worker
-    monkeypatch.delenv("JARVIS_3D_BACKEND", raising=False)
+    monkeypatch.setenv("JARVIS_3D_BACKEND", "sf3d")
     calls = _stub_backends(monkeypatch, worker, sf3d_error=RuntimeError("gated repo"))
     assert worker._build_mesh([object()], None, True) == ("tsr-mesh", "triposr", False)
     assert calls == ["sf3d", "triposr"]
@@ -315,3 +362,55 @@ def test_triposr_backend_skips_sf3d(monkeypatch):
     calls = _stub_backends(monkeypatch, worker)
     assert worker._build_mesh([object()], None, True)[1] == "triposr"
     assert calls == ["triposr"]
+
+
+def test_sf3d_texture_resolution_defaults_to_512_and_can_be_overridden(monkeypatch):
+    from core import local_3d_worker as worker
+    monkeypatch.delenv("JARVIS_3D_TEXTURE", raising=False)
+    assert worker.sf3d_texture_resolution() == 512
+    monkeypatch.setenv("JARVIS_3D_TEXTURE", "1024")
+    assert worker.sf3d_texture_resolution() == 1024
+
+
+def test_local_worker_monitor_requests_confirmed_triposr_fallback(monkeypatch):
+    clock = [0.0]
+    launched = []
+    progress = []
+
+    class FakeProcess:
+        def __init__(self, backend_name):
+            self.backend_name = backend_name
+            self.terminated = False
+            self.poll_count = 0
+            self.returncode = 0
+
+        def communicate(self, timeout=None):
+            if self.terminated:
+                return "", ""
+            self.poll_count += 1
+            if self.backend_name == "sf3d":
+                clock[0] += float(timeout or 1)
+                raise subprocess.TimeoutExpired("worker", timeout)
+            return "triposr result", ""
+
+        def poll(self):
+            return 0 if self.terminated else None
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+    def fake_popen(cmd, **kwargs):
+        backend_name = kwargs["env"]["JARVIS_3D_BACKEND"]
+        launched.append(backend_name)
+        return FakeProcess(backend_name)
+
+    monkeypatch.setattr(gen.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(gen.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gen, "SF3D_SLOW_AFTER_SECONDS", 2)
+    code, stdout, _ = gen._run_monitored(
+        ["worker"], 20, "sf3d", progress.append, lambda: True
+    )
+    assert code == 0 and stdout == "triposr result"
+    assert launched == ["sf3d", "triposr"]
+    assert progress == [1, 2]

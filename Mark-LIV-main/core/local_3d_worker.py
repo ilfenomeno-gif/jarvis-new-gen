@@ -41,9 +41,9 @@ def emit(payload: dict) -> None:
 
 
 def backend() -> str:
-    """JARVIS_3D_BACKEND=sf3d|triposr (default sf3d; sf3d falls back to triposr on any failure)."""
-    value = os.environ.get("JARVIS_3D_BACKEND", "sf3d").strip().lower()
-    return value if value in ("sf3d", "triposr") else "sf3d"
+    """JARVIS_3D_BACKEND=sf3d|triposr (default triposr; sf3d falls back on failure)."""
+    value = os.environ.get("JARVIS_3D_BACKEND", "triposr").strip().lower()
+    return value if value in ("sf3d", "triposr") else "triposr"
 
 
 def sf3d_dir() -> Path:
@@ -238,6 +238,11 @@ def _cutout_from_images(images):
     return resize_foreground(cut, 0.85)
 
 
+def sf3d_texture_resolution() -> int:
+    """Return SF3D's texture bake resolution (512 by default; 1024 is sharper but slower)."""
+    return int(os.environ.get("JARVIS_3D_TEXTURE", "512"))
+
+
 def _image_to_mesh_sf3d(cut_rgba, torch):
     """Stable Fast 3D: UV-unwrapped mesh with a baked PBR texture. Input is the RGBA cutout (not grey-composited)."""
     sys.path.insert(0, str(sf3d_dir()))
@@ -250,7 +255,7 @@ def _image_to_mesh_sf3d(cut_rgba, torch):
         model.eval()
         started = lap("sf3d_load", started)
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-            mesh, _ = model.run_image([cut_rgba], bake_resolution=int(os.environ.get("JARVIS_3D_TEXTURE", "1024")),
+            mesh, _ = model.run_image([cut_rgba], bake_resolution=sf3d_texture_resolution(),
                                       remesh="none", vertex_count=-1)
         lap("sf3d_forward", started)
         return mesh

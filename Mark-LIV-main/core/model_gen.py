@@ -42,14 +42,16 @@ def _config_path(config_dir: Path | None) -> Path:
 
 
 def backend(config_dir: Path | None = None) -> str:
-    """auto (Tripo when a key exists, else local if installed), local or tripo."""
+    """Return the configured engine; local is the default, auto prefers keyed Tripo."""
     value = os.environ.get(BACKEND_ENV, "").strip().lower()
+    if value in ("sf3d", "triposr"):
+        return "local"
     if value not in BACKENDS:
         try:
             value = str(json.loads(_config_path(config_dir).read_text(encoding="utf-8")).get("backend", ""))
         except (OSError, ValueError, AttributeError):
             value = ""
-    return value if value in BACKENDS else "auto"
+    return value if value in BACKENDS else "local"
 
 
 def set_backend(value: str, config_dir: Path | None = None) -> str:

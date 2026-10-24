@@ -44,6 +44,7 @@ SETUP_MESSAGE = (
     "Local 3D generation is not installed. Run 'python -m core.local_3d_gen setup', then "
     "'pip install -r requirements-3d.txt' (see the file for the CUDA build of torch)."
 )
+SF3D_SLOW_AFTER_SECONDS = 180
 OOM_MESSAGE = (
     "The GPU ran out of memory. Close other GPU programs (games, video editors, browsers "
     "with hardware acceleration) and retry, or use the Tripo backend."
@@ -156,13 +157,94 @@ def hf_token(config_dir: Path | None = None, store=None) -> str:
 
 def _run(cmd: list[str], timeout: float):
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "TRIPOSR_DIR": str(TRIPOSR_DIR), "SF3D_DIR": str(SF3D_DIR)}
-    token = hf_token()
-    if token:  # passed via the child's environment only, never argv
-        env["HF_TOKEN"] = token
+    env = _worker_env()
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                           timeout=timeout, creationflags=flags, cwd=str(BASE), env=env)
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def _worker_env(backend_override: str | None = None) -> dict[str, str]:
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "TRIPOSR_DIR": str(TRIPOSR_DIR),
+        "SF3D_DIR": str(SF3D_DIR),
+    }
+    token = hf_token()
+    if token:
+        env["HF_TOKEN"] = token
+    if backend_override:
+        env["JARVIS_3D_BACKEND"] = backend_override
+    return env
+
+
+def configured_backend() -> str:
+    """Return the local worker backend, defaulting safely to TripoSR."""
+    return "sf3d" if os.environ.get("JARVIS_3D_BACKEND", "").strip().lower() == "sf3d" else "triposr"
+
+
+def _stop_worker(proc) -> None:
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+
+
+def _run_monitored(cmd: list[str], timeout: float, backend_name: str,
+                   progress_callback=None, fallback_callback=None):
+    """Run the worker while reporting elapsed time and optionally restarting on SF3D timeout."""
+    started = time.monotonic()
+    deadline = started + timeout
+    selected_backend = backend_name
+    prompted = False
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = None
+    try:
+        while True:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace", creationflags=flags,
+                cwd=str(BASE), env=_worker_env(selected_backend),
+            )
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _stop_worker(proc)
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+                try:
+                    stdout, stderr = proc.communicate(timeout=min(1.0, remaining))
+                    return proc.returncode, stdout, stderr
+                except subprocess.TimeoutExpired:
+                    elapsed = time.monotonic() - started
+                    if callable(progress_callback):
+                        progress_callback(int(elapsed))
+                    if (
+                        selected_backend == "sf3d"
+                        and elapsed >= SF3D_SLOW_AFTER_SECONDS
+                        and not prompted
+                    ):
+                        prompted = True
+                        _log_event("sf3d_slow", elapsed_seconds=round(elapsed, 2))
+                        use_triposr = bool(fallback_callback()) if callable(fallback_callback) else False
+                        if use_triposr:
+                            _stop_worker(proc)
+                            if "--out" in cmd:
+                                Path(cmd[cmd.index("--out") + 1]).unlink(missing_ok=True)
+                            _log_event(
+                                "backend_fallback",
+                                source="sf3d",
+                                target="triposr",
+                                category="timeout",
+                                reason="user_confirmed",
+                            )
+                            selected_backend = "triposr"
+                            break
+    finally:
+        if proc is not None and proc.poll() is None:
+            _stop_worker(proc)
 
 
 def _parse_result(stdout: str) -> dict | None:
@@ -218,7 +300,8 @@ def generate_local(*args, **kwargs) -> Path:
 
 
 def _generate_local(prompt, models_dir: Path | None = None, runner=None,
-                    timeout: float = DEFAULT_TIMEOUT, image: Path | None = None) -> Path:
+                    timeout: float = DEFAULT_TIMEOUT, image: Path | None = None,
+                    progress_callback=None, fallback_callback=None) -> Path:
     """Blocking: run in a worker thread. Returns the saved .glb path.
 
     With ``image`` (a sanitised PNG from core.image_input) the SD-Turbo stage is skipped and
@@ -227,7 +310,6 @@ def _generate_local(prompt, models_dir: Path | None = None, runner=None,
     prompt = clean_prompt(prompt)
     models_dir = Path(models_dir or MODELS_DIR)
     models_dir.mkdir(parents=True, exist_ok=True)
-    runner = runner or _run
     problem = readiness_problem(probe(runner))
     if problem:
         raise RuntimeError(problem)
@@ -239,13 +321,19 @@ def _generate_local(prompt, models_dir: Path | None = None, runner=None,
         cmd = [python_exe(), "-m", "core.local_3d_worker", "--out", str(out_file)]
         cmd += ["--image", str(image)] if image else ["--prompt", prompt]
         started = time.monotonic()
+        backend_name = configured_backend()
         _log_event(
             "generation_started",
-            backend=os.environ.get("JARVIS_3D_BACKEND", "sf3d").lower(),
+            backend=backend_name,
             timeout_seconds=timeout,
         )
         try:
-            code, stdout, stderr = runner(cmd, timeout)
+            if runner is None:
+                code, stdout, stderr = _run_monitored(
+                    cmd, timeout, backend_name, progress_callback, fallback_callback
+                )
+            else:
+                code, stdout, stderr = runner(cmd, timeout)
         except subprocess.TimeoutExpired as exc:
             _log_worker_diagnostics(_captured_text(exc.stdout))
             _log_event(

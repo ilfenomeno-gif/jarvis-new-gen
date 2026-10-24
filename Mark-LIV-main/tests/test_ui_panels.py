@@ -252,6 +252,58 @@ def test_quantum_hud_applies_data_driven_visual_states():
     hud.close()
 
 
+def test_generation_status_shows_backend_and_elapsed_seconds(monkeypatch):
+    import ui as ui_module
+
+    class Timer:
+        started = False
+
+        def start(self, interval):
+            self.started = interval == 1000
+
+        def stop(self):
+            self.started = False
+
+    class Label:
+        text = ""
+        visible = False
+
+        def clear(self):
+            self.text = ""
+
+        def hide(self):
+            self.visible = False
+
+        def show(self):
+            self.visible = True
+
+        def setText(self, text):
+            self.text = text
+
+    class Window:
+        _generation_tmr = Timer()
+        _generation_backend = ""
+        _generation_started_at = 0.0
+        _generation_elapsed = 0
+        _generation_status_label = Label()
+
+        def _tick_generation_status(self):
+            ui_module.MainWindow._tick_generation_status(self)
+
+    monkeypatch.setattr(ui_module.time, "monotonic", lambda: 0.0)
+    window = Window()
+    ui_module.MainWindow._set_generation_status(window, "SF3D")
+    ui_module.MainWindow._set_generation_elapsed(window, 45)
+    assert window._generation_tmr.started
+    assert window._generation_status_label.visible
+    assert window._generation_status_label.text == (
+        "Generazione in corso... [SF3D] - 45s"
+    )
+    ui_module.MainWindow._set_generation_status(window, "")
+    assert not window._generation_tmr.started
+    assert not window._generation_status_label.visible
+
+
 def test_docks_are_movable_closable_floatable_and_center_stays_central(real_ui):
     from PyQt6.QtWidgets import QDockWidget
     win = real_ui()._win

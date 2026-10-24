@@ -50,11 +50,16 @@ def _load_in_scene(player, path, model_id: str, scale, params=None) -> None:
 
 def generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
     set_hud_state = getattr(player, "set_jarvis_state", None)
+    set_generation_status = getattr(player, "set_generation_status", None)
     if callable(set_hud_state):
         set_hud_state("generating_3d")
+    if callable(set_generation_status):
+        set_generation_status("Preparazione")
     try:
         return _generate_3d_model(parameters, player, **_ignored)
     finally:
+        if callable(set_generation_status):
+            set_generation_status("")
         if callable(set_hud_state):
             set_hud_state("listening")
 
@@ -81,13 +86,17 @@ def _generate_3d_model(parameters: dict, player=None, **_ignored) -> str:
     use_local = choice == "local" or (choice == "auto" and not key and local_3d_gen.is_installed())
     try:
         if use_local:
+            backend = local_3d_gen.configured_backend()
+            _set_generation_status(player, "SF3D" if backend == "sf3d" else "TripoSR")
             try:
-                path = local_3d_gen.generate_local(prompt)
+                options = _generation_callbacks(player)
+                path = local_3d_gen.generate_local(prompt, **options)
             except RuntimeError:
                 raise
             except Exception as exc:
                 raise RuntimeError(f"{type(exc).__name__}: {exc}") from None
         elif choice == "tripo" or key:
+            _set_generation_status(player, "Tripo3D")
             if not model_gen.tripo_available():
                 return model_gen.SDK_MISSING_MESSAGE
             if not key:
@@ -122,6 +131,23 @@ def _scene_message(path, model_id: str, scale) -> str:
     return (f"Model '{path.name}' generated and ADDED to the scene with id '{model_id}'{size}, next to the "
             "existing models (nothing was replaced); it inherits the scene's current material style. Use viewer_3d "
             "set_material_style to change the look of the whole scene.")
+
+
+def _set_generation_status(player, backend: str) -> None:
+    callback = getattr(player, "set_generation_status", None)
+    if callable(callback):
+        callback(backend)
+
+
+def _generation_callbacks(player) -> dict:
+    callbacks = {}
+    progress = getattr(player, "update_generation_progress", None)
+    fallback = getattr(player, "request_triposr_fallback", None)
+    if callable(progress):
+        callbacks["progress_callback"] = progress
+    if callable(fallback):
+        callbacks["fallback_callback"] = fallback
+    return callbacks
 
 
 def _show_local(player, params, path, style: str = "blueprint", note: str = "") -> str:
@@ -175,7 +201,11 @@ def _image_to_3d(params: dict, image_path: str, image_url: str, player) -> str:
         style, note = _image_style(params, image)
         try:
             label = model_gen.clean_prompt(label)
-            path = local_3d_gen.generate_local(label, image=image)
+            backend = local_3d_gen.configured_backend()
+            _set_generation_status(player, "SF3D" if backend == "sf3d" else "TripoSR")
+            path = local_3d_gen.generate_local(
+                label, image=image, **_generation_callbacks(player)
+            )
         except RuntimeError as exc:
             return f"3D generation failed (local engine): {exc}"
         except Exception as exc:
@@ -188,8 +218,8 @@ def _image_to_3d(params: dict, image_path: str, image_url: str, player) -> str:
 TOOL = {
     "name": "generate_3d_model",
     "description": (
-        "Creates a 3D model from a text description (free local GPU generator, or Tripo3D "
-        "with API credits; takes up to a few minutes) and shows it as a hologram in the central display. Use when "
+        "Creates a 3D model from a text description (default: local TripoSR GPU generator; optional Tripo3D "
+        "API with credits; may take a few minutes) and shows it as a hologram in the central display. Use when "
         "the user asks to create, build or show something in 3D, e.g. 'make a hologram "
         "of a jet engine'. Also turns a picture into a hologram (image_path for a local file, "
         "image_url for a web image): faster, no text-to-image step. Afterwards viewer_3d can explode_model, "
@@ -217,7 +247,8 @@ TOOL = {
                 "description": (
                     "Forces the generator for this call only. Use 'local' (free, GPU) when the "
                     "user asks for the local generator or Tripo failed (e.g. no credits); "
-                    "'tripo' for the paid API; omit for the configured default."
+                    "'tripo' for the paid API; omit for the default (local TripoSR). SF3D can be "
+                    "selected with JARVIS_3D_BACKEND=sf3d."
                 ),
             },
         },

@@ -3013,6 +3013,9 @@ class HudDock(QDockWidget):
 class MainWindow(QMainWindow):
     _log_sig          = pyqtSignal(str)
     _state_sig        = pyqtSignal(str)
+    _generation_status_sig = pyqtSignal(str)
+    _generation_elapsed_sig = pyqtSignal(int)
+    _generation_fallback_sig = pyqtSignal(object)
     _content_hide_sig = pyqtSignal(str)      # title prefix of the content panel to close
     _content_sig      = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig     = pyqtSignal()           # trigger setup overlay from any thread
@@ -3109,6 +3112,9 @@ class MainWindow(QMainWindow):
         self._remote_overlay: RemoteKeyOverlay | None = None
         self._customize_overlay: CustomizeOverlay | None = None
         self._wake_word_setup_active = False
+        self._generation_backend = ""
+        self._generation_started_at = 0.0
+        self._generation_elapsed = 0
 
         central = QWidget()
         central.setObjectName("jarvisCentralWidget")
@@ -3268,9 +3274,14 @@ class MainWindow(QMainWindow):
         self._metric_tmr.timeout.connect(self._update_metrics)
         self._metric_tmr.start(2000)
         self._update_metrics()
+        self._generation_tmr = QTimer(self)
+        self._generation_tmr.timeout.connect(self._tick_generation_status)
 
         self._log_sig.connect(self._on_log_message)
         self._state_sig.connect(self._apply_state)
+        self._generation_status_sig.connect(self._set_generation_status)
+        self._generation_elapsed_sig.connect(self._set_generation_elapsed)
+        self._generation_fallback_sig.connect(self._handle_generation_fallback)
         self.hud.animationChanged.connect(self._viewer3d_set_hud_state)
         self._hud_reload_timer = QTimer(self)
         self._hud_reload_timer.setInterval(250)
@@ -3922,6 +3933,70 @@ class MainWindow(QMainWindow):
         dialog.setEscapeButton(cancel_button)
         dialog.exec()
         return dialog.clickedButton() is open_button
+
+    def _ask_sf3d_fallback(self) -> bool:
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Generazione SF3D lenta")
+        dialog.setText(
+            "SF3D sta impiegando troppo. Vuoi annullare e usare TripoSR?"
+        )
+        fallback_button = dialog.addButton(
+            "Annulla e usa TripoSR", QMessageBox.ButtonRole.AcceptRole
+        )
+        continue_button = dialog.addButton(
+            "Continua SF3D", QMessageBox.ButtonRole.RejectRole
+        )
+        dialog.setDefaultButton(continue_button)
+        dialog.setEscapeButton(continue_button)
+        dialog.exec()
+        return dialog.clickedButton() is fallback_button
+
+    def _handle_generation_fallback(self, response: object) -> None:
+        if not isinstance(response, dict):
+            return
+        try:
+            confirmed = self._ask_sf3d_fallback()
+            response["use_triposr"] = confirmed
+            if confirmed:
+                self._set_generation_status("TripoSR")
+        except Exception as exc:
+            response["error"] = str(exc)
+            self._log_sig.emit(f"Generazione 3D: dialog fallback non riuscito: {exc}")
+        finally:
+            event = response.get("event")
+            if isinstance(event, threading.Event):
+                event.set()
+
+    def _set_generation_status(self, backend: str) -> None:
+        backend = str(backend or "").strip()
+        if not backend:
+            self._generation_tmr.stop()
+            self._generation_backend = ""
+            self._generation_status_label.clear()
+            self._generation_status_label.hide()
+            return
+        if not self._generation_backend:
+            self._generation_started_at = time.monotonic()
+            self._generation_elapsed = 0
+        self._generation_backend = backend
+        self._generation_status_label.show()
+        self._tick_generation_status()
+        self._generation_tmr.start(1000)
+
+    def _set_generation_elapsed(self, elapsed: int) -> None:
+        self._generation_elapsed = max(self._generation_elapsed, int(elapsed))
+        self._tick_generation_status()
+
+    def _tick_generation_status(self) -> None:
+        if not self._generation_backend:
+            return
+        elapsed = max(
+            self._generation_elapsed,
+            int(time.monotonic() - self._generation_started_at),
+        )
+        self._generation_status_label.setText(
+            f"Generazione in corso... [{self._generation_backend}] - {elapsed}s"
+        )
 
     def _confirm_streaming_play_on_ui_thread(self, url: str, response: object) -> None:
         if not isinstance(response, dict):
@@ -5175,6 +5250,13 @@ class MainWindow(QMainWindow):
             QProgressBar::chunk {{ background: {C.PRI_DIM}; }}
         """)
         lay.addWidget(self._task_runner_progress)
+        self._generation_status_label = QLabel()
+        self._generation_status_label.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._generation_status_label.setStyleSheet(
+            f"color: {C.ACC}; background: transparent;"
+        )
+        self._generation_status_label.hide()
+        lay.addWidget(self._generation_status_label)
 
         self._interrupt_btn = QPushButton("✋  INTERRUPT  [ESC]")
         self._interrupt_btn.setFixedHeight(34)
@@ -6455,6 +6537,23 @@ class JarvisUI:
             expected = ", ".join(sorted(_JARVIS_VISUAL_STATES))
             raise ValueError(f"state must be one of: {expected}")
         self._win._state_sig.emit(normalized.upper())
+
+    def set_generation_status(self, backend: str) -> None:
+        """Thread-safe: start, update or clear the live 3D generation HUD status."""
+        self._win._generation_status_sig.emit(str(backend or ""))
+
+    def update_generation_progress(self, elapsed: int) -> None:
+        """Thread-safe elapsed-time update from the local worker monitor."""
+        self._win._generation_elapsed_sig.emit(int(elapsed))
+
+    def request_triposr_fallback(self) -> bool:
+        """Ask on the UI thread before cancelling a slow SF3D process."""
+        response = {"event": threading.Event(), "use_triposr": False}
+        self._win._generation_fallback_sig.emit(response)
+        if not response["event"].wait(1800):
+            self.write_log("Generazione 3D: conferma fallback scaduta; SF3D continua.")
+            return False
+        return bool(response["use_triposr"])
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)

@@ -39,6 +39,19 @@ memory/                 Gestione della memoria persistente locale
 tests/                  Test automatici dei contratti di automazione
 ```
 
+## Generazione 3D locale
+
+Il generatore predefinito usa TripoSR in locale (GPU); la durata dipende da GPU,
+cache e descrizione. SF3D resta selezionabile impostando
+`JARVIS_3D_BACKEND=sf3d` nell'ambiente del processo. Per ridurre i tempi di
+inferenza, SF3D usa una texture da 512 px invece di 1024: il risultato ha meno
+dettaglio, ma il baking e l'inferenza sono più leggeri. Per ripristinare la
+risoluzione maggiore si può impostare `JARVIS_3D_TEXTURE=1024`.
+
+Durante la generazione l'HUD mostra backend e tempo trascorso. Se SF3D supera
+180 secondi, JARVIS chiede se interromperlo e riprovare con TripoSR; il fallback
+avviene solo dopo conferma.
+
 ## Requisiti
 
 - Windows 10/11, macOS o Linux.
