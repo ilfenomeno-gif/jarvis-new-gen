@@ -3624,14 +3624,14 @@ class MainWindow(QMainWindow):
             return
         self.viewer3d_call(
             "setHudState",
-            [
+            json.dumps([
                 snapshot["state"],
                 snapshot["core_color"],
                 snapshot["ring_speed"],
                 snapshot["glow_intensity"],
                 snapshot["particle_count"],
                 snapshot["transition_seconds"],
-            ],
+            ]),
         )
 
     def _viewer3d_set_hover(self, name: str, text: str) -> None:
