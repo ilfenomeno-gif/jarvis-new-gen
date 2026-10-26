@@ -7,7 +7,7 @@ _MODES = (
     "load_live_flights", "clear_flights", "load_model", "clear_model",
     "explode_model", "highlight_part", "set_hologram",
     "set_material_style", "set_part_info", "list_parts", "list_models", "hovered_part",
-    "set_controls",
+    "set_controls", "set_clipping",
 )
 
 
@@ -38,6 +38,11 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
             on = bool(params.get("on", True))
             player.viewer3d_call("setControls", [on])
             return "Mouse controls on (drag rotates, wheel zooms, right button pans)." if on else "Mouse controls off."
+        if mode == "set_clipping":
+            axis = str(params.get("axis") or "off").strip().lower()
+            position = params.get("position", 0.5)
+            player.viewer3d_call("setClipping", [axis, position])
+            return "Clipping removed." if axis in ("off", "none") else f"Clipping enabled on {axis} at {position}."
         if mode == "list_models":
             from core.viewer3d import list_models
             found = list_models()
@@ -152,7 +157,9 @@ TOOL = {
         "zoom, right button to pan); they are on by default. The model 'cad/pc.glb' (a "
         "multi-part PC: case, motherboard, cpu, cpu_cooler, ram_1, ram_2, gpu, psu, fan) "
         "always exists: for 'explain/take apart a PC' call load_model with model=cad/pc.glb, "
-        "then explode_model; never say it is missing."
+        "then explode_model; never say it is missing. set_clipping (axis=x|y|z|off, "
+        "position=0..1) cuts the loaded model in its local bounds, adds a stencil cap, "
+        "and disables spin while the cut is active."
     ),
     "risk_class": "read",
     "parameters": {
@@ -169,6 +176,8 @@ TOOL = {
             "part": {"type": "STRING", "description": "For highlight_part: node name."},
             "style": {"type": "STRING", "description": "For set_material_style: hologram, blueprint, realistic, flat (unlit original colours) or toon (cartoon shading, for drawings/anime)."},
             "part_info": {"type": "STRING", "description": "For set_part_info: JSON object text, part name -> description."},
+            "axis": {"type": "STRING", "description": "For set_clipping: x, y, z, or off."},
+            "position": {"type": "NUMBER", "description": "For set_clipping: cut position from 0 to 1 (default 0.5)."},
         },
         "required": ["mode"],
     },

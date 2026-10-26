@@ -14,8 +14,9 @@ const canvas = document.getElementById("c");
 // Senza WebGL (GPU in blocklist) il viewer resta controllabile ma non disegna.
 let renderer = null;
 try {
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, stencil: true });
   renderer.setClearColor(0x000308, 1);
+  renderer.localClippingEnabled = true;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.debug.onShaderError = () => { state.shaderError = "shader compile failed"; };
@@ -23,6 +24,8 @@ try {
   console.error("WebGL non disponibile: " + e.message);
 }
 const scene = new THREE.Scene();
+const clipStencilScene = new THREE.Scene();
+const clipCapsScene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
 camera.position.set(0, 0, 4.2);
 
@@ -232,6 +235,154 @@ function rotationFor(lat, lon) {
   return new THREE.Quaternion().setFromUnitVectors(target, new THREE.Vector3(0, 0, 1));
 }
 
+const clip = { axis: "", position: 0.5 };
+const CLIP_NORMALS = { x: [-1, 0, 0], y: [0, -1, 0], z: [0, 0, -1] };
+
+function updateClipTransform(m) {
+  m.group.updateMatrixWorld(true);
+  m.clipWorldPlane.copy(m.clipPlane).applyMatrix4(m.group.matrixWorld);
+}
+
+function updateClipCap(m, coordinate) {
+  const size = m.clipBounds.getSize(new THREE.Vector3());
+  const dimensions = clip.axis === "x"
+    ? [size.z, size.y]
+    : clip.axis === "y" ? [size.x, size.z] : [size.x, size.y];
+  if (m.clipCapAxis !== clip.axis) {
+    m.clipCap.geometry.dispose();
+    m.clipCap.geometry = new THREE.PlaneGeometry(
+      Math.max(dimensions[0] * 1.02, dimensions[0] + 0.01),
+      Math.max(dimensions[1] * 1.02, dimensions[1] + 0.01)
+    );
+    m.clipCap.rotation.set(0, 0, 0);
+    if (clip.axis === "x") m.clipCap.rotation.y = Math.PI / 2;
+    else if (clip.axis === "y") m.clipCap.rotation.x = Math.PI / 2;
+    m.clipCapAxis = clip.axis;
+  }
+  m.clipCap.position.set(0, 0, 0);
+  m.clipCap.position[clip.axis] = coordinate;
+  m.clipCap.updateMatrix();
+  m.clipCapLocalMatrix.copy(m.clipCap.matrix);
+}
+
+function updateClipPlane() {
+  const m = state.model;
+  if (!m || !clip.axis) return false;
+  const normal = CLIP_NORMALS[clip.axis];
+  const lo = m.clipBounds.min[clip.axis], hi = m.clipBounds.max[clip.axis];
+  const coordinate = lo + (hi - lo) * clip.position;
+  m.clipPlane.normal.set(normal[0], normal[1], normal[2]);
+  m.clipPlane.constant = coordinate;
+  updateClipCap(m, coordinate);
+  updateClipTransform(m);
+  return true;
+}
+
+function syncClip() {
+  const m = state.model;
+  if (!m) return;
+  const on = !!clip.axis;
+  if (on) updateClipPlane();
+  m.group.traverse(o => {
+    if (o === m.clipCap || !(o.isMesh || o.isLine)) return;
+    [].concat(o.material).forEach(mat => {
+      if (!mat) return;
+      mat.clippingPlanes = on ? [m.clipWorldPlane] : null;
+      if (mat.isShaderMaterial) mat.clipping = true;
+      if (on && mat.userData.side0 === undefined) {
+        mat.userData.side0 = mat.side;
+        mat.side = THREE.DoubleSide;
+      } else if (!on && mat.userData.side0 !== undefined) {
+        mat.side = mat.userData.side0;
+        delete mat.userData.side0;
+      }
+      mat.needsUpdate = true;
+    });
+  });
+  m.clipCap.visible = on;
+}
+
+function createClipResources(m, bounds) {
+  m.clipBounds = bounds.clone();
+  m.clipPlane = new THREE.Plane();
+  m.clipWorldPlane = new THREE.Plane();
+  const baseMaterial = new THREE.MeshBasicMaterial({
+    depthWrite: false,
+    depthTest: false,
+    colorWrite: false,
+    stencilWrite: true,
+    stencilFunc: THREE.AlwaysStencilFunc,
+  });
+  m.clipBackMaterial = baseMaterial.clone();
+  m.clipBackMaterial.side = THREE.BackSide;
+  m.clipBackMaterial.stencilFail = THREE.IncrementWrapStencilOp;
+  m.clipBackMaterial.stencilZFail = THREE.IncrementWrapStencilOp;
+  m.clipBackMaterial.stencilZPass = THREE.IncrementWrapStencilOp;
+  m.clipBackMaterial.clippingPlanes = [m.clipWorldPlane];
+  m.clipFrontMaterial = baseMaterial.clone();
+  m.clipFrontMaterial.side = THREE.FrontSide;
+  m.clipFrontMaterial.stencilFail = THREE.DecrementWrapStencilOp;
+  m.clipFrontMaterial.stencilZFail = THREE.DecrementWrapStencilOp;
+  m.clipFrontMaterial.stencilZPass = THREE.DecrementWrapStencilOp;
+  m.clipFrontMaterial.clippingPlanes = [m.clipWorldPlane];
+  baseMaterial.dispose();
+
+  m.clipCapMaterial = new THREE.MeshStandardMaterial({
+    color: 0x536b78,
+    metalness: 0.12,
+    roughness: 0.78,
+    side: THREE.DoubleSide,
+    stencilWrite: true,
+    stencilRef: 0,
+    stencilFunc: THREE.NotEqualStencilFunc,
+    stencilFail: THREE.ReplaceStencilOp,
+    stencilZFail: THREE.ReplaceStencilOp,
+    stencilZPass: THREE.ReplaceStencilOp,
+  });
+  m.clipCap = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), m.clipCapMaterial);
+  m.clipCap.matrixAutoUpdate = false;
+  m.clipCap.onAfterRender = activeRenderer => activeRenderer.clearStencil();
+  m.clipCapLocalMatrix = new THREE.Matrix4();
+  clipCapsScene.add(m.clipCap);
+}
+
+function renderClippedScene() {
+  if (!clip.axis) {
+    renderer.render(scene, camera);
+    return;
+  }
+  const autoClear = renderer.autoClear;
+  renderer.autoClear = false;
+  try {
+    updateClipTransform(state.model);
+    renderer.clear(true, true, true);
+    renderer.render(scene, camera);
+    const m = state.model;
+    if (m && m.clipCap.visible && m.group.visible) {
+      renderer.clearStencil();
+      const originalMaterials = m.meshes.map(mesh => mesh.material);
+      scene.remove(m.group);
+      clipStencilScene.add(m.group);
+      try {
+        m.meshes.forEach(mesh => { mesh.material = m.clipBackMaterial; });
+        renderer.render(clipStencilScene, camera);
+        m.meshes.forEach(mesh => { mesh.material = m.clipFrontMaterial; });
+        renderer.render(clipStencilScene, camera);
+      } finally {
+        m.meshes.forEach((mesh, index) => { mesh.material = originalMaterials[index]; });
+        clipStencilScene.remove(m.group);
+        scene.add(m.group);
+      }
+      updateClipTransform(m);
+      m.clipCap.matrix.copy(m.group.matrixWorld).multiply(m.clipCapLocalMatrix);
+      m.clipCap.matrixWorldNeedsUpdate = true;
+      renderer.render(clipCapsScene, camera);
+    }
+  } finally {
+    renderer.autoClear = autoClear;
+  }
+}
+
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -259,7 +410,7 @@ function frame(now) {
   }
   pickPart(now);
   if (controls.enabled) controls.update();
-  if (renderer) renderer.render(scene, camera);
+  if (renderer) renderClippedScene();
   requestAnimationFrame(frame);
 }
 
@@ -650,13 +801,16 @@ window.jarvisViewer = {
         const size = box.getSize(new THREE.Vector3());
         const scale = 1.6 / (Math.max(size.x, size.y, size.z) || 1);
         const group = new THREE.Group();
-        root.position.sub(box.getCenter(new THREE.Vector3()));
+        const center = box.getCenter(new THREE.Vector3());
+        root.position.sub(center);
         group.add(root);
         group.scale.setScalar(scale);
         scene.add(group);
         group.updateMatrixWorld(true);
         state.model = { group, root, name, meshes: meshesOf(root), parts: collectParts(root, Math.max(size.x, size.y, size.z) || 1), explode: 0, explodeTo: 0, highlight: "", holo: [], hologram: false, style: "hologram" };
-                applyStyle(state.model, state.style);
+        createClipResources(state.model, box.clone().translate(center.clone().negate()));
+        applyStyle(state.model, state.style);
+        syncClip();
         syncLook();
         state.modelStatus = "ready";
         syncControls();
@@ -669,6 +823,20 @@ window.jarvisViewer = {
         state.modelStatus = "error"; state.modelError = String(err && err.message || err);
       }
     );
+  },
+  setClipping(axis, position) {
+    axis = String(axis).toLowerCase();
+    if (axis === "off" || axis === "none" || axis === "") {
+      clip.axis = "";
+    } else {
+      if (!CLIP_NORMALS[axis]) throw new Error("axis must be x, y, z or off");
+      if (!state.model) throw new Error("no model loaded to cut");
+      clip.axis = axis;
+      clip.position = num(position === undefined ? 0.5 : position, 0, 1, "position");
+      state.spin = false;
+      updateClipPlane();
+    }
+    syncClip();
   },
   explodeModel(on) {
     if (state.model) state.model.explodeTo = on ? 1 : 0;
@@ -693,6 +861,7 @@ window.jarvisViewer = {
     const keep = m.highlight;
     if (keep) this.highlightPart("");
     applyStyle(m, style);
+    syncClip();
     syncLook();
     if (keep) this.highlightPart(keep);
   },
@@ -712,6 +881,11 @@ window.jarvisViewer = {
     loadToken++;
     if (state.model) {
       scene.remove(state.model.group);
+      clipCapsScene.remove(state.model.clipCap);
+      state.model.clipBackMaterial.dispose();
+      state.model.clipFrontMaterial.dispose();
+      state.model.clipCap.geometry.dispose();
+      state.model.clipCapMaterial.dispose();
       disposeObject(state.model.root);
     }
     state.model = null;
@@ -724,7 +898,7 @@ window.jarvisViewer = {
     globe.visible = true;
     rings.forEach(r => { r.visible = true; });
   },
-  spin(on) { state.spin = !!on; if (on) state.target = null; },
+  spin(on) { state.spin = !!on && !clip.axis; if (on && !clip.axis) state.target = null; },
   setControls(active) {
     state.controlsOn = !!active;
     syncControls();
@@ -744,6 +918,16 @@ window.jarvisViewer = {
       },
       controls: { enabled: controls.enabled, wanted: state.controlsOn, distance: Number(camera.position.distanceTo(controls.target).toFixed(3)), azimuth: Number(controls.getAzimuthalAngle().toFixed(3)) },
       flights: state.flights ? state.flights.list.length : 0,
+      clipping: {
+        axis: clip.axis,
+        position: clip.position,
+        clipped: state.model ? state.model.meshes.filter(mesh => [].concat(mesh.material)[0].clippingPlanes).length : 0,
+        caps: clip.axis && state.model && state.model.clipCap.visible ? 1 : 0,
+        planes: state.model ? [{
+          normal: state.model.clipWorldPlane.normal.toArray().map(value => Number(value.toFixed(3))),
+          constant: Number(state.model.clipWorldPlane.constant.toFixed(3)),
+        }] : [],
+      },
       look: { environment: !!scene.environment, envLoaded: !!envMap, envError: state.envError || "", shadows: keyLight.castShadow, shadowFloor: shadowFloor.visible, toneMapping: renderer ? renderer.toneMapping : 0, shadowCasters: state.model ? state.model.meshes.filter(o => o.castShadow).length : 0 },
       model: {
         status: state.modelStatus,

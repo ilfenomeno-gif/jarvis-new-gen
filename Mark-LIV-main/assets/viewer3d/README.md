@@ -14,6 +14,8 @@ API JS esposta come `window.jarvisViewer`: `flyTo(lat, lon)`, `addMarker(lat, lo
 
 Gli stati visuali sono definiti in `config/hud_states.json` e le durate in `config/hud_transitions.json`; PyQt6 interpola core, anelli, glow, waveform e particelle, mentre il viewer anima core, anelli e particelle con gli stessi parametri. Dopo aver modificato i JSON, eseguire `python -m core.registry_cli reload_hud_states` dalla cartella `Mark-LIV-main`: l'istanza attiva rileva il segnale su file e ricarica senza riavvio.
 
+Il clipping del modello usa i suoi bounds locali e rimane solidale alla trasformazione quando il modello ruota. Il renderer abilita lo stencil buffer per chiudere la superficie tagliata; `set_clipping` accetta `axis=x|y|z|off` e `position=0..1` (predefinito 0.5). Lo spin automatico resta disattivato finché il clipping è attivo.
+
 
 HDRI `hdr/studio.hdr`: Poly Haven `studio_small_03` 1k, licenza CC0 (usato da `realistic` per riflessi PBR).
 

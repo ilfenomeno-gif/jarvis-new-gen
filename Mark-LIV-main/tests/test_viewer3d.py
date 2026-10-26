@@ -16,6 +16,7 @@ def test_build_call_validates_and_serialises():
     assert build_call("flyTo", [41.9, 12.5]) == ("flyTo", "[41.9, 12.5]")
     assert build_call("addMarker", ["10", 20, "x" * 100])[1].count("x") == 60
     assert build_call("clearMarkers", []) == ("clearMarkers", "[]")
+    assert build_call("setClipping", ["x", 0.5]) == ("setClipping", '["x", 0.5]')
     assert build_call("setHudState", ["listening", "#00ff88", 0.9, 1.1, 8, 0.3])[0] == "setHudState"
     for bad in (
         ("flyTo", [91, 0]), ("flyTo", [0, 181]), ("flyTo", ["a", 0]),
@@ -23,6 +24,7 @@ def test_build_call_validates_and_serialises():
         ("eval", []), ("document.write", ["x"]),
         ("setHudState", ["unknown", "#00ff88", 0.9, 1.1, 8, 0.3]),
         ("setHudState", ["idle", "blue", 0.9, 1.1, 8, 0.3]),
+        ("setClipping", ["w", 0.5]), ("setClipping", ["x", 2]),
     ):
         with pytest.raises(ValueError):
             build_call(*bad)
@@ -49,6 +51,9 @@ def test_tool_routes_modes_and_reports_invalid_input():
     assert "Unknown mode" in viewer_3d.viewer_3d({"mode": "x"}, player=ui)
     assert "not available" in viewer_3d.viewer_3d({"mode": "show"}, player=None)
     assert ui.calls == [("show", True), ("flyTo", [1, 2])]
+    assert "Clipping enabled" in viewer_3d.viewer_3d({"mode": "set_clipping", "axis": "y"}, player=ui)
+    assert ui.calls[-1] == ("setClipping", ["y", 0.5])
+    assert "Invalid request" in viewer_3d.viewer_3d({"mode": "set_clipping", "axis": "invalid"}, player=ui)
     assert viewer_3d.TOOL["risk_class"] == "read"
 
 
@@ -262,6 +267,59 @@ def test_real_page_loads_glb_model():
             or "Invalid" in viewer_3d.viewer_3d({"mode": "load_model", "model": "nope.glb"}, player=jarvis)
     finally:
         path.unlink(missing_ok=True)
+
+
+@needs_local_gpu_stack
+def test_real_page_clips_pc_cad_during_mouse_rotation():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    jarvis = ui_module.JarvisUI("")
+    win = jarvis._win
+    try:
+        win.resize(900, 700)
+        win.show()
+        viewer_3d.viewer_3d({"mode": "load_model", "model": "cad/pc.glb"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["status"] in ("ready", "error"))
+        assert state["model"]["status"] == "ready", state["model"]
+        if not state["webgl"]:
+            pytest.skip("WebGL is not available in this environment")
+
+        viewer_3d.viewer_3d({"mode": "set_clipping", "axis": "x"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["clipping"]["axis"] == "x")
+        assert state["clipping"]["clipped"] > 0
+        assert state["clipping"]["caps"] == 1
+        assert state["spin"] is False
+
+        from PyQt6.QtCore import QPoint, Qt
+        from PyQt6.QtTest import QTest
+        target = win._viewer3d.focusProxy() or win._viewer3d
+        before = state["controls"]["azimuth"]
+        start = QPoint(target.width() // 2, target.height() // 2)
+        QTest.mousePress(target, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+        for step in range(1, 21):
+            QTest.mouseMove(target, start + QPoint(step * 8, 0))
+            app.processEvents()
+        QTest.mouseRelease(target, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start + QPoint(160, 0))
+        state = _poll_state(app, win, lambda s: abs(s["controls"]["azimuth"] - before) > 0.1)
+        assert state["clipping"]["caps"] == 1
+        assert state["model"]["shaderError"] == ""
+        viewer_3d.viewer_3d({"mode": "spin", "spin": True}, player=jarvis)
+        assert _poll_state(app, win, lambda s: True)["spin"] is False
+        for style in ("realistic", "blueprint", "hologram"):
+            viewer_3d.viewer_3d({"mode": "set_material_style", "style": style}, player=jarvis)
+            state = _poll_state(app, win, lambda s: s["model"]["style"] == style)
+            assert state["clipping"]["caps"] == 1
+            assert state["model"]["shaderError"] == ""
+
+        viewer_3d.viewer_3d({"mode": "set_clipping", "axis": "off"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["clipping"]["axis"] == "")
+        assert state["clipping"]["clipped"] == 0
+    finally:
+        win._layout_timer.stop()
+        win.close()
 
 
 def test_pc_cad_has_pbr_materials_and_cylinders(tmp_path):

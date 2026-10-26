@@ -23,6 +23,7 @@ ALLOWED = {
     "setMaterialStyle": 1,
     "setPartInfo": 1,
     "setControls": 1,
+    "setClipping": 2,
     "setHudState": 6,
 }
 STYLES = ("hologram", "blueprint", "realistic", "flat", "toon")
@@ -215,6 +216,11 @@ def build_call(function: str, args: list) -> tuple[str, str]:
         if style not in STYLES:
             raise ValueError(f"style must be one of: {', '.join(STYLES)}")
         clean = [style]
+    elif function == "setClipping":
+        axis = args[0].strip().lower() if isinstance(args[0], str) else ""
+        if axis not in ("x", "y", "z", "off", "none"):
+            raise ValueError("axis must be x, y, z or off")
+        clean = [axis, _coord(args[1], 0, 1, "position")]
     elif function == "setPartInfo":
         if not isinstance(args[0], dict):
             raise ValueError("part info must be an object of part name -> description")
