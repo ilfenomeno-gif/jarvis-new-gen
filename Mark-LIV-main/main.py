@@ -1226,8 +1226,6 @@ class JarvisLive:
                 )
                 self._pattern_context = context
                 self._pattern_style = style
-                if args.get("style") and style:
-                    pattern_learner.observe_style_preference(context, style)
             elif name == "viewer_3d" and str(args.get("mode") or "").casefold() == "set_material_style":
                 style = pattern_learner.style_for_text(args.get("style"))
                 if style:

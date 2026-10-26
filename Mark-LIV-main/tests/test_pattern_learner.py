@@ -118,6 +118,34 @@ def test_live_dispatcher_learns_repeated_search_failures(pattern_store):
     assert "use generate_3d_model" in pattern_learner.get_hints_for("car")
 
 
+def test_live_dispatcher_learns_only_corrected_style_not_generation_baseline(pattern_store):
+    import main as jarvis_main
+
+    jarvis = object.__new__(jarvis_main.JarvisLive)
+    for model in ("Ferrari", "Lamborghini", "Porsche"):
+        jarvis._last_user_text = f"create a {model}"
+        jarvis._observe_pattern_tool_result(
+            "generate_3d_model",
+            {"prompt": f"{model} car", "style": "blueprint"},
+            "Model generated successfully",
+        )
+        jarvis._observe_pattern_tool_result(
+            "viewer_3d",
+            {"mode": "set_material_style", "style": "realistic"},
+            "Style updated",
+        )
+
+    patterns = pattern_learner.list_patterns()
+    assert len(patterns) == 1
+    assert patterns[0]["type"] == "style_preference"
+    assert patterns[0]["context"] == "auto"
+    assert patterns[0]["observation"] == "preferred:realistic;previous:blueprint"
+    assert patterns[0]["occurrences"] == 3
+    assert patterns[0]["confidence"] == 0.9
+    hints = pattern_learner.get_hints_for("create another car")
+    assert hints == "For auto models, prefer realistic over blueprint."
+
+
 def test_pattern_cli_list_delete_and_confirmed_clear(pattern_store):
     for _ in range(3):
         pattern_learner.observe_tool_failure("auto")
