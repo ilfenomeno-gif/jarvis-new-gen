@@ -1,6 +1,8 @@
 """Local 3D generation: orchestration with a fake subprocess runner (no GPU, no models)."""
 import json
 import subprocess
+import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -18,6 +20,11 @@ def isolate_generation_log(monkeypatch, tmp_path):
         gen,
         "_LOG_PATH",
         tmp_path.parent / f"{tmp_path.name}-local_3d_gen.log",
+    )
+    monkeypatch.setattr(
+        gen,
+        "CACHE_DIR",
+        tmp_path.parent / f"{tmp_path.name}-cache-3d",
     )
 
 
@@ -56,6 +63,154 @@ def test_generate_success(tmp_path):
     assert path.name == model_gen.model_name("a simple chair") and path.read_bytes()[:4] == b"glTF"
     assert [p.name for p in tmp_path.iterdir()] == [path.name]
     assert any("--prompt" in c for c in runner.calls)
+
+
+def test_persistent_cache_hit_reuses_valid_glb_without_worker(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "cache" / "3d"
+    models_dir = tmp_path / "models"
+    monkeypatch.setattr(gen, "CACHE_DIR", cache_dir)
+    monkeypatch.setattr(gen, "probe", lambda runner=None: READY)
+    runner = make_runner()
+
+    started = time.monotonic()
+    first = gen.generate_local("  A   Test Cube  ", models_dir, runner)
+    worker_calls = len(runner.calls)
+    monkeypatch.setattr(gen, "probe", lambda runner=None: (_ for _ in ()).throw(
+        AssertionError("cache hit must not probe or launch the worker")
+    ))
+
+    started = time.monotonic()
+    second = gen.generate_local("a test cube", models_dir, runner)
+    second_elapsed = time.monotonic() - started
+
+    assert first == second
+    assert second.read_bytes()[:4] == b"glTF"
+    assert len(runner.calls) == worker_calls
+    assert second_elapsed < 1
+    metadata = next(cache_dir.glob("*.json"))
+    item = json.loads(metadata.read_text(encoding="utf-8"))
+    assert item["prompt"] == "  A   Test Cube  "
+    assert item["backend"] == "triposr"
+    assert item["size_bytes"] == first.stat().st_size
+    assert len(item["key"]) == 64
+    assert gen._cache_key(" A   Test Cube ", "triposr") == item["key"]
+
+
+def test_cache_key_tracks_backend_model_parameters_and_image(tmp_path, monkeypatch):
+    image = tmp_path / "input.png"
+    image.write_bytes(b"image one")
+    base = gen._cache_key("a chair", "triposr", image)
+    assert gen._cache_key(" A   CHAIR ", "triposr", image) == base
+    assert gen._cache_key("a chair", "sf3d", image) != base
+    monkeypatch.setenv("JARVIS_3D_TEXTURE", "512")
+    sf3d_512 = gen._cache_key("a chair", "sf3d", image)
+    monkeypatch.setenv("JARVIS_3D_TEXTURE", "768")
+    assert gen._cache_key("a chair", "sf3d", image) != sf3d_512
+    image.write_bytes(b"image two")
+    assert gen._cache_key("a chair", "triposr", image) != base
+
+
+def test_cache_disabled_bypasses_reads_and_writes(tmp_path, monkeypatch):
+    monkeypatch.setattr(gen, "probe", lambda runner=None: READY)
+    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setenv("JARVIS_3D_CACHE", "0")
+    runner = make_runner()
+    first = gen.generate_local("a chair", tmp_path / "models", runner)
+    calls_after_first = len(runner.calls)
+    second = gen.generate_local("a chair", tmp_path / "models", runner)
+    assert first == second
+    assert len(runner.calls) > calls_after_first
+    assert not gen.CACHE_DIR.exists()
+
+
+def test_invalid_cache_policy_fails_before_probe(tmp_path, monkeypatch):
+    monkeypatch.setenv("JARVIS_3D_CACHE_TTL_DAYS", "nan")
+    monkeypatch.setattr(
+        gen,
+        "probe",
+        lambda runner=None: (_ for _ in ()).throw(
+            AssertionError("invalid cache settings must fail before probing")
+        ),
+    )
+    with pytest.raises(ValueError, match="finite non-negative"):
+        gen.generate_local("a chair", tmp_path, make_runner())
+
+
+def test_corrupt_cache_entry_is_discarded_and_regenerated(tmp_path, monkeypatch):
+    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(gen, "probe", lambda runner=None: READY)
+    models_dir = tmp_path / "models"
+    first = gen.generate_local("a chair", models_dir, make_runner())
+    key = gen._cache_key("a chair", "triposr")
+    glb_path, _ = gen._cache_paths(key)
+    glb_path.write_bytes(b"corrupt")
+
+    runner = make_runner()
+    second = gen.generate_local("a chair", models_dir, runner)
+    assert second == first
+    assert second.read_bytes()[:4] == b"glTF"
+    assert any("--prompt" in cmd for cmd in runner.calls)
+    assert glb_path.read_bytes()[:4] == b"glTF"
+
+
+def test_expired_cache_entry_is_regenerated(tmp_path, monkeypatch):
+    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(gen, "probe", lambda runner=None: READY)
+    models_dir = tmp_path / "models"
+    gen.generate_local("a chair", models_dir, make_runner())
+    key = gen._cache_key("a chair", "triposr")
+    _, metadata_path = gen._cache_paths(key)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["created_at"] = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    runner = make_runner()
+    gen.generate_local("a chair", models_dir, runner)
+    assert any("--prompt" in cmd for cmd in runner.calls)
+    refreshed = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert datetime.fromisoformat(refreshed["created_at"]) > datetime.now(timezone.utc) - timedelta(days=1)
+
+
+def test_cache_size_limit_skips_cache_without_failing_generation(tmp_path, monkeypatch):
+    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(gen, "probe", lambda runner=None: READY)
+    monkeypatch.setenv("JARVIS_3D_CACHE_MAX_GB", "0.000000001")
+    path = gen.generate_local("a chair", tmp_path / "models", make_runner())
+    assert path.read_bytes()[:4] == b"glTF"
+    assert gen.cache_size_bytes() == 0
+
+
+def test_cache_size_limit_evicts_oldest_entry(tmp_path, monkeypatch):
+    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(gen, "probe", lambda runner=None: READY)
+    monkeypatch.setenv("JARVIS_3D_CACHE_MAX_GB", "0.000001")
+    models_dir = tmp_path / "models"
+    gen.generate_local("first chair", models_dir, make_runner())
+    gen.generate_local("second chair", models_dir, make_runner())
+
+    entries = gen.cache_entries()
+    assert len(entries) == 1
+    assert entries[0]["prompt"] == "second chair"
+    assert gen.cache_size_bytes() <= 1024 * 1024 * 0.000001 * 1024
+
+
+def test_cache_cli_list_size_and_confirmed_clear(tmp_path, monkeypatch):
+    from core import registry_cli
+
+    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(gen, "probe", lambda runner=None: READY)
+    gen.generate_local("a test cube", tmp_path / "models", make_runner())
+    unrelated = gen.CACHE_DIR / "notes.txt"
+    unrelated.write_text("keep", encoding="utf-8")
+
+    listing = registry_cli.run(["cache-3d", "list"], None)
+    assert "a test cube" in listing and "triposr" in listing and "bytes" in listing
+    size = registry_cli.run(["cache-3d", "size"], None)
+    assert "3D cache:" in size and "MiB" in size
+    assert registry_cli.run(["cache-3d", "clear"], None).startswith("error:")
+    assert "files removed" in registry_cli.run(["cache-3d", "clear", "--yes"], None)
+    assert registry_cli.run(["cache-3d", "list"], None) == "3D cache is empty"
+    assert unrelated.read_text(encoding="utf-8") == "keep"
 
 
 def test_generation_logs_fallback_and_timings_without_prompt(monkeypatch, tmp_path):

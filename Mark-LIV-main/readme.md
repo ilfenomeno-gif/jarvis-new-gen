@@ -52,6 +52,23 @@ Durante la generazione l'HUD mostra backend e tempo trascorso. Se SF3D supera
 180 secondi, JARVIS chiede se interromperlo e riprovare con TripoSR; il fallback
 avviene solo dopo conferma.
 
+Le generazioni locali valide sono riutilizzate dalla cache persistente
+`cache/3d/` (prompt normalizzato, backend e parametri fanno parte della chiave;
+gli input immagine sono identificati dal contenuto). Per ispezionarla:
+
+```powershell
+python -m core.registry_cli cache-3d list
+python -m core.registry_cli cache-3d size
+python -m core.registry_cli cache-3d clear --yes
+```
+
+La cache è attiva per default; `JARVIS_3D_CACHE=0` la disabilita.
+`JARVIS_3D_CACHE_TTL_DAYS` e `JARVIS_3D_CACHE_MAX_GB` configurano scadenza
+(default 30 giorni) e tetto (default 5 GiB); impostare a `0` disabilita il
+rispettivo limite. Il pre-warm non è disponibile: il worker è un processo
+separato per generazione e il benchmark attuale individua SD-Turbo, non il
+caricamento TripoSR, come fase fredda prevalente.
+
 ## Requisiti
 
 - Windows 10/11, macOS o Linux.

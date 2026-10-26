@@ -9,6 +9,7 @@ Management CLI for connectors and skills.
     python -m core.registry_cli skill-approve <skill> --reviewer <name>
     python -m core.registry_cli set-tripo-key                 # hidden prompt, for generate_3d_model
     python -m core.registry_cli set-3d-backend auto|local|tripo
+    python -m core.registry_cli cache-3d list|size|clear       # inspect or clear local generation cache
     python -m core.registry_cli download-cad-models           # multi-part CAD models for explode_model
     python -m core.registry_cli reload_hud_states             # validate and notify running HUDs
 
@@ -47,12 +48,39 @@ def run(argv: list[str], runtime: Runtime | None, read_token: Callable[[str], st
     backend_cmd.add_argument("backend", choices=("auto", "local", "tripo"))
     sub.add_parser("download-cad-models")
     sub.add_parser("reload_hud_states")
+    cache = sub.add_parser("cache-3d")
+    cache_sub = cache.add_subparsers(dest="cache_action", required=True)
+    cache_sub.add_parser("list")
+    cache_sub.add_parser("size")
+    cache_clear = cache_sub.add_parser("clear")
+    cache_clear.add_argument("--yes", action="store_true")
     approve = sub.add_parser("skill-approve")
     approve.add_argument("skill")
     approve.add_argument("--reviewer", required=True)
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "cache-3d":
+            from core import local_3d_gen
+            try:
+                if args.cache_action == "list":
+                    entries = local_3d_gen.cache_entries()
+                    if not entries:
+                        return "3D cache is empty"
+                    return "\n".join(
+                        f"{' '.join(str(entry.get('prompt') or '').split())[:160]} | "
+                        f"{entry.get('backend', 'unknown')} | "
+                        f"{entry.get('size_bytes', 0)} bytes | "
+                        f"{entry.get('created_at', 'unknown')}"
+                        for entry in entries
+                    )
+                if args.cache_action == "size":
+                    size = local_3d_gen.cache_size_bytes()
+                    return f"3D cache: {size} bytes ({size / 1024**2:.2f} MiB)"
+                removed = local_3d_gen.clear_cache(confirmed=args.yes)
+                return f"3D cache cleared ({removed} files removed)"
+            except (OSError, ValueError) as exc:
+                return f"error: {exc}"
         if args.command == "reload_hud_states":
             from core.hud_animator import HudAnimator, request_reload
             config_dir = BASE_DIR / "config"
@@ -109,7 +137,7 @@ def run(argv: list[str], runtime: Runtime | None, read_token: Callable[[str], st
 
 def main() -> int:
     argv = sys.argv[1:]
-    runtime = None if argv == ["reload_hud_states"] else build_runtime()
+    runtime = None if argv == ["reload_hud_states"] or argv[:1] == ["cache-3d"] else build_runtime()
     output = run(argv, runtime)
     print(output)
     return 1 if output.startswith("error:") else 0

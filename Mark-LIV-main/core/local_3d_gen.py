@@ -13,13 +13,16 @@ import hashlib
 import importlib.util
 import json
 import logging
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -27,6 +30,10 @@ from core.model_gen import clean_prompt, model_name
 from core.viewer3d import MAX_MODEL_BYTES, MODELS_DIR
 
 BASE = Path(__file__).resolve().parent.parent
+CACHE_DIR = BASE / "cache" / "3d"
+CACHE_PIPELINE_VERSION = "1"
+DEFAULT_CACHE_TTL_DAYS = 30
+DEFAULT_CACHE_MAX_GB = 5
 TRIPOSR_DIR = Path(os.environ.get("TRIPOSR_DIR") or BASE / "third_party" / "TripoSR")
 TRIPOSR_REPO = "https://github.com/VAST-AI-Research/TripoSR.git"
 SF3D_DIR = Path(os.environ.get("SF3D_DIR") or BASE / "third_party" / "stable-fast-3d")
@@ -286,6 +293,280 @@ def readiness_problem(info: dict) -> str | None:
     return None
 
 
+def _cache_enabled() -> bool:
+    return os.environ.get("JARVIS_3D_CACHE", "1").strip() != "0"
+
+
+def _cache_policy() -> tuple[float, int]:
+    try:
+        ttl_days = float(os.environ.get("JARVIS_3D_CACHE_TTL_DAYS", DEFAULT_CACHE_TTL_DAYS))
+        max_gb = float(os.environ.get("JARVIS_3D_CACHE_MAX_GB", DEFAULT_CACHE_MAX_GB))
+    except ValueError as exc:
+        raise ValueError("JARVIS_3D_CACHE_TTL_DAYS and JARVIS_3D_CACHE_MAX_GB must be numbers") from exc
+    if not math.isfinite(ttl_days) or not math.isfinite(max_gb) or ttl_days < 0 or max_gb < 0:
+        raise ValueError("3D cache TTL and maximum size must be finite non-negative numbers")
+    try:
+        max_bytes = int(max_gb * 1024**3)
+    except OverflowError as exc:
+        raise ValueError("JARVIS_3D_CACHE_MAX_GB is too large") from exc
+    return ttl_days, max_bytes
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _cache_key(prompt: str, backend_name: str, image: Path | None = None) -> str:
+    normalized_prompt = re.sub(r"\s+", " ", prompt.strip().lower())
+    try:
+        candidates = max(1, min(6, int(os.environ.get("JARVIS_3D_CANDIDATES", "3"))))
+    except ValueError:
+        candidates = 3
+    parameters = {
+        "pipeline": CACHE_PIPELINE_VERSION,
+        "text2img_model": os.environ.get("JARVIS_3D_TEXT2IMG", "stabilityai/sd-turbo"),
+        "backend": backend_name,
+        "half_precision": os.environ.get("JARVIS_3D_HALF", "1") != "0",
+        "candidates": candidates,
+        "triposr_model": os.environ.get("JARVIS_3D_TRIPOSR", "stabilityai/TripoSR"),
+    }
+    if backend_name == "sf3d":
+        parameters.update(
+            sf3d_model=os.environ.get("JARVIS_3D_SF3D", "stabilityai/stable-fast-3d"),
+            texture_resolution=os.environ.get("JARVIS_3D_TEXTURE", "512"),
+        )
+    if image is not None:
+        parameters["image_sha256"] = _sha256_file(Path(image))
+    payload = json.dumps(
+        {"prompt": normalized_prompt, "parameters": parameters},
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _cache_paths(key: str) -> tuple[Path, Path]:
+    return CACHE_DIR / f"{key}.glb", CACHE_DIR / f"{key}.json"
+
+
+def _remove_cache_entry(key: str) -> None:
+    for path in _cache_paths(key):
+        path.unlink(missing_ok=True)
+
+
+def _read_cache_metadata(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _valid_glb(path: Path) -> bool:
+    try:
+        size = path.stat().st_size
+        if not path.is_file() or size <= 0 or size > MAX_MODEL_BYTES:
+            return False
+        with path.open("rb") as handle:
+            return handle.read(4) == b"glTF"
+    except OSError:
+        return False
+
+
+def _cache_lookup(key: str, models_dir: Path) -> Path | None:
+    glb_path, metadata_path = _cache_paths(key)
+    if not glb_path.exists() and not metadata_path.exists():
+        return None
+    ttl_days, _ = _cache_policy()
+    metadata = _read_cache_metadata(metadata_path)
+    if metadata is None or metadata.get("key") != key or not _valid_glb(glb_path):
+        _remove_cache_entry(key)
+        _log_event("cache_invalidated", reason="invalid_entry")
+        return None
+    try:
+        created_at = datetime.fromisoformat(str(metadata["created_at"]))
+        if ttl_days and datetime.now(timezone.utc) - created_at > timedelta(days=ttl_days):
+            _remove_cache_entry(key)
+            _log_event("cache_invalidated", reason="expired")
+            return None
+        if metadata.get("sha256") != _sha256_file(glb_path):
+            _remove_cache_entry(key)
+            _log_event("cache_invalidated", reason="checksum_mismatch")
+            return None
+        cached_name = str(metadata["model_name"])
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,100}\.glb", cached_name):
+            _remove_cache_entry(key)
+            _log_event("cache_invalidated", reason="invalid_model_name")
+            return None
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        _remove_cache_entry(key)
+        _log_event("cache_invalidated", reason=f"invalid_metadata_{type(exc).__name__}")
+        return None
+
+    target = models_dir / cached_name
+    if not _valid_glb(target) or _sha256_file(target) != metadata["sha256"]:
+        temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            shutil.copyfile(glb_path, temporary)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+        if not _valid_glb(target) or _sha256_file(target) != metadata["sha256"]:
+            target.unlink(missing_ok=True)
+            return None
+    metadata["last_accessed_at"] = datetime.now(timezone.utc).isoformat()
+    _write_json_atomic(metadata_path, metadata)
+    _log_event(
+        "cache_hit",
+        backend=str(metadata.get("backend") or "unknown")[:30],
+        output_bytes=glb_path.stat().st_size,
+    )
+    return target
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _enforce_cache_limits(new_key: str) -> bool:
+    ttl_days, max_bytes = _cache_policy()
+    now = datetime.now(timezone.utc)
+    entries = []
+    for metadata_path in CACHE_DIR.glob("*.json"):
+        key = metadata_path.stem
+        if not re.fullmatch(r"[a-f0-9]{64}", key):
+            continue
+        metadata = _read_cache_metadata(metadata_path)
+        glb_path, _ = _cache_paths(key)
+        try:
+            created_at = datetime.fromisoformat(str(metadata["created_at"])) if metadata else None
+        except (KeyError, TypeError, ValueError):
+            created_at = None
+        if metadata is None or created_at is None or not glb_path.is_file():
+            _remove_cache_entry(key)
+            continue
+        if ttl_days and now - created_at > timedelta(days=ttl_days):
+            _remove_cache_entry(key)
+            continue
+        entries.append((created_at, key, glb_path.stat().st_size + metadata_path.stat().st_size))
+    for glb_path in CACHE_DIR.glob("*.glb"):
+        if (
+            re.fullmatch(r"[a-f0-9]{64}", glb_path.stem)
+            and not glb_path.with_suffix(".json").is_file()
+        ):
+            glb_path.unlink(missing_ok=True)
+
+    total = sum(size for _, _, size in entries)
+    if not max_bytes:
+        return True
+    for _, key, size in sorted(entries):
+        if total <= max_bytes:
+            break
+        if key == new_key:
+            continue
+        _remove_cache_entry(key)
+        total -= size
+    if total > max_bytes:
+        _remove_cache_entry(new_key)
+        return False
+    return True
+
+
+def _cache_store(
+    key: str,
+    source: Path,
+    prompt: str,
+    backend_name: str,
+    model_filename: str,
+) -> bool:
+    if not _cache_enabled():
+        return False
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    ttl_days, max_bytes = _cache_policy()
+    glb_path, metadata_path = _cache_paths(key)
+    size = source.stat().st_size
+    if max_bytes and size > max_bytes:
+        _log_event("cache_write_skipped", reason="entry_exceeds_size_limit")
+        return False
+    temporary = CACHE_DIR / f".{key}.{uuid.uuid4().hex}.tmp"
+    try:
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, glb_path)
+        metadata = {
+            "key": key,
+            "prompt": prompt,
+            "backend": backend_name,
+            "model_name": model_filename,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_accessed_at": datetime.now(timezone.utc).isoformat(),
+            "size_bytes": size,
+            "sha256": _sha256_file(glb_path),
+            "ttl_days_at_creation": ttl_days,
+        }
+        _write_json_atomic(metadata_path, metadata)
+        if not _enforce_cache_limits(key):
+            _log_event("cache_write_skipped", reason="cache_size_limit")
+            return False
+    except OSError:
+        _remove_cache_entry(key)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+    return glb_path.is_file() and metadata_path.is_file()
+
+
+def cache_entries() -> list[dict]:
+    """Return cache metadata for the local CLI; prompts never enter application logs."""
+    entries = []
+    for metadata_path in sorted(CACHE_DIR.glob("*.json")):
+        metadata = _read_cache_metadata(metadata_path)
+        if metadata is None:
+            raise ValueError(f"invalid 3D cache metadata: {metadata_path.name}")
+        entries.append(metadata)
+    return entries
+
+
+def cache_size_bytes() -> int:
+    if not CACHE_DIR.is_dir():
+        return 0
+    return sum(path.stat().st_size for path in CACHE_DIR.iterdir() if path.is_file())
+
+
+def clear_cache(confirmed: bool = False) -> int:
+    """Remove only cache-owned files after explicit confirmation."""
+    if not confirmed:
+        raise ValueError("clearing the 3D cache requires --yes")
+    if not CACHE_DIR.is_dir():
+        return 0
+    removed = 0
+    for path in CACHE_DIR.iterdir():
+        if not path.is_file():
+            continue
+        owned_file = re.fullmatch(
+            r"(?:[a-f0-9]{64}\.(?:glb|json)|"
+            r"\.[a-f0-9]{64}\.[a-f0-9]{32}\.tmp|"
+            r"\.[a-f0-9]{64}\.(?:glb|json)\.[a-f0-9]{32}\.tmp)",
+            path.name,
+        )
+        if owned_file:
+            path.unlink()
+            removed += 1
+    return removed
+
+
 _GEN_LOCK = threading.Lock()
 
 
@@ -307,9 +588,22 @@ def _generate_local(prompt, models_dir: Path | None = None, runner=None,
     With ``image`` (a sanitised PNG from core.image_input) the SD-Turbo stage is skipped and
     TripoSR reconstructs the picture directly; ``prompt`` then only names the model file.
     """
+    original_prompt = str(prompt or "")
     prompt = clean_prompt(prompt)
     models_dir = Path(models_dir or MODELS_DIR)
     models_dir.mkdir(parents=True, exist_ok=True)
+    backend_name = configured_backend()
+    cache_enabled = _cache_enabled()
+    if cache_enabled:
+        _cache_policy()
+    cache_key = _cache_key(prompt, backend_name, image) if cache_enabled else ""
+    if cache_key:
+        try:
+            cached_path = _cache_lookup(cache_key, models_dir)
+            if cached_path is not None:
+                return cached_path
+        except OSError as exc:
+            _log_event("cache_read_failed", error_type=type(exc).__name__)
     problem = readiness_problem(probe(runner))
     if problem:
         raise RuntimeError(problem)
@@ -321,7 +615,6 @@ def _generate_local(prompt, models_dir: Path | None = None, runner=None,
         cmd = [python_exe(), "-m", "core.local_3d_worker", "--out", str(out_file)]
         cmd += ["--image", str(image)] if image else ["--prompt", prompt]
         started = time.monotonic()
-        backend_name = configured_backend()
         _log_event(
             "generation_started",
             backend=backend_name,
@@ -389,6 +682,17 @@ def _generate_local(prompt, models_dir: Path | None = None, runner=None,
         digest = hashlib.sha1(Path(image).read_bytes()).hexdigest() if image else ""
         target = models_dir / model_name(prompt + digest)
         shutil.move(str(out_file), target)
+        if cache_key:
+            try:
+                _cache_store(
+                    cache_key,
+                    target,
+                    original_prompt,
+                    str(result.get("backend") or backend_name)[:30],
+                    target.name,
+                )
+            except OSError as exc:
+                _log_event("cache_write_failed", error_type=type(exc).__name__)
         _log_event(
             "generation_completed",
             backend=str(result.get("backend") or "unknown")[:30],
