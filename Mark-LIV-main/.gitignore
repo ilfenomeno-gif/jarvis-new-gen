@@ -19,6 +19,7 @@ node_modules/
 
 # ── Runtime state ────────────────────────────────────────────────────────
 memory/*.json
+!/memory/learned_patterns.json
 *.log
 /cache/3d/
 

@@ -69,6 +69,16 @@ rispettivo limite. Il pre-warm non è disponibile: il worker è un processo
 separato per generazione e il benchmark attuale individua SD-Turbo, non il
 caricamento TripoSR, come fase fredda prevalente.
 
+## Pattern Learner
+
+Jarvis apprende preferenze ripetute sullo stile 3D, fallimenti di ricerca e correzioni esplicite. Gli hint entrano nel prompt dopo tre osservazioni concordi, con un limite di tre e 200 caratteri. `JARVIS_PATTERN_LEARNER=0` disattiva apprendimento e iniezione. I dati restano in `memory/learned_patterns.json` e si gestiscono con:
+
+```powershell
+python -m core.registry_cli patterns-list
+python -m core.registry_cli patterns-delete <id>
+python -m core.registry_cli patterns-clear --yes
+```
+
 ## Requisiti
 
 - Windows 10/11, macOS o Linux.

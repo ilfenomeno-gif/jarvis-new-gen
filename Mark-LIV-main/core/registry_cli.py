@@ -54,6 +54,10 @@ def run(argv: list[str], runtime: Runtime | None, read_token: Callable[[str], st
     cache_sub.add_parser("size")
     cache_clear = cache_sub.add_parser("clear")
     cache_clear.add_argument("--yes", action="store_true")
+    sub.add_parser("patterns-list")
+    sub.add_parser("patterns-delete").add_argument("id")
+    patterns_clear = sub.add_parser("patterns-clear")
+    patterns_clear.add_argument("--yes", action="store_true")
     approve = sub.add_parser("skill-approve")
     approve.add_argument("skill")
     approve.add_argument("--reviewer", required=True)
@@ -87,6 +91,38 @@ def run(argv: list[str], runtime: Runtime | None, read_token: Callable[[str], st
             HudAnimator(config_dir).reload()
             request_reload(config_dir)
             return "HUD states validated; reload requested for running Jarvis instances."
+        if args.command == "patterns-list":
+            from core import pattern_learner
+            try:
+                patterns = pattern_learner.list_patterns()
+            except (OSError, ValueError) as exc:
+                return f"error: {exc}"
+            if not patterns:
+                return "No learned patterns"
+            return "\n".join(
+                f"{item['id']} | {item['type']} | {item['context']} | "
+                f"{item['observation']} | confidence {item['confidence']:.2f} | "
+                f"{item['occurrences']} occurrences | {item['last_seen']}"
+                for item in patterns
+            )
+        if args.command == "patterns-delete":
+            from core import pattern_learner
+            try:
+                deleted = pattern_learner.delete_pattern(args.id)
+            except (OSError, ValueError) as exc:
+                return f"error: {exc}"
+            if not deleted:
+                return f"error: pattern '{args.id}' not found"
+            return f"{args.id}: deleted"
+        if args.command == "patterns-clear":
+            if not args.yes:
+                return "error: this erases ALL learned patterns; run again with --yes to confirm"
+            from core import pattern_learner
+            try:
+                removed = pattern_learner.clear()
+            except (OSError, ValueError) as exc:
+                return f"error: {exc}"
+            return f"learned patterns cleared ({removed} patterns removed)"
         if args.command == "status":
             return json.dumps({"connectors": runtime.connectors.view(),
                                "skills": runtime.skills.view()}, indent=2, ensure_ascii=False)
@@ -137,7 +173,8 @@ def run(argv: list[str], runtime: Runtime | None, read_token: Callable[[str], st
 
 def main() -> int:
     argv = sys.argv[1:]
-    runtime = None if argv == ["reload_hud_states"] or argv[:1] == ["cache-3d"] else build_runtime()
+    standalone = {"cache-3d", "patterns-list", "patterns-delete", "patterns-clear"}
+    runtime = None if argv == ["reload_hud_states"] or (argv and argv[0] in standalone) else build_runtime()
     output = run(argv, runtime)
     print(output)
     return 1 if output.startswith("error:") else 0

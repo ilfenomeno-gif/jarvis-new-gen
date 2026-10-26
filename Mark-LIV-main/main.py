@@ -89,6 +89,7 @@ from core.tool_router          import ToolRouter
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
 from core                      import audio_devices
+from core                      import pattern_learner
 from core.guardrails           import (
     install_subprocess_guards, require_policy_file, append_rule,
 )
@@ -943,6 +944,8 @@ class JarvisLive:
         self._last_user_speech = time.monotonic()  # updated on every user utterance
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
         self._last_user_text = ""                  # latest transcript for intent routing
+        self._pattern_context = ""
+        self._pattern_style = None
         self._prompt_router = PromptRouter()
         self._tool_router = ToolRouter()
         self._recent_user_texts: collections.deque[str] = collections.deque(maxlen=6)
@@ -1191,11 +1194,68 @@ class JarvisLive:
         manual = self._dashboard.get_manual_url()
         return url, key, f"{url}/auto-login?key={key}", manual
 
+    def _observe_pattern_feedback(self, text: str) -> None:
+        context = getattr(self, "_pattern_context", "")
+        if not context:
+            return
+        try:
+            pattern_learner.observe_correction(
+                context, text, getattr(self, "_pattern_style", None)
+            )
+        except (OSError, ValueError) as exc:
+            logging.getLogger(__name__).warning("Pattern observation unavailable: %s", exc)
+
+    def _observe_pattern_tool_result(self, name: str, args: dict, result: str) -> None:
+        try:
+            if name == "search_3d_model":
+                context = pattern_learner.model_context_for(args.get("query") or self._last_user_text)
+                self._pattern_context = context
+                self._pattern_style = None
+                if result.startswith(("No exact ready-made 3D model found", "Tool 'search_3d_model' failed:")):
+                    pattern_learner.observe_tool_failure(context)
+                elif result.startswith("Found 3D model"):
+                    self._pattern_style = "realistic"
+            elif name == "generate_3d_model" and not result.startswith(
+                ("Tool 'generate_3d_model' failed:", "3D generation failed", "Invalid request")
+            ):
+                context = pattern_learner.model_context_for(args.get("prompt") or self._last_user_text)
+                style = (
+                    pattern_learner.style_for_text(args.get("style"))
+                    or pattern_learner.style_for_text(result)
+                    or pattern_learner.style_for_text(self._last_user_text)
+                )
+                self._pattern_context = context
+                self._pattern_style = style
+                if args.get("style") and style:
+                    pattern_learner.observe_style_preference(context, style)
+            elif name == "viewer_3d" and str(args.get("mode") or "").casefold() == "set_material_style":
+                style = pattern_learner.style_for_text(args.get("style"))
+                if style:
+                    context = getattr(self, "_pattern_context", "") or pattern_learner.context_for(self._last_user_text)
+                    pattern_learner.observe_style_preference(
+                        context, style, getattr(self, "_pattern_style", None)
+                    )
+                    self._pattern_context = context
+                    self._pattern_style = style
+            elif name != "viewer_3d":
+                self._pattern_context = pattern_learner.context_for(self._last_user_text)
+                self._pattern_style = None
+        except (OSError, ValueError) as exc:
+            logging.getLogger(__name__).warning("Pattern observation unavailable: %s", exc)
+
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
             return
+        self._observe_pattern_feedback(text)
         self._schedule_geo_route(text)
         dynamic_instruction = self._prompt_router.instruction_for(text)
+        try:
+            learned_hints = pattern_learner.get_hints_for(text)
+        except (OSError, ValueError) as exc:
+            logging.getLogger(__name__).warning("Pattern hints unavailable: %s", exc)
+            learned_hints = ""
+        if learned_hints:
+            dynamic_instruction += f"\n[LEARNED PREFERENCES]\n{learned_hints}"
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
                 turns={"parts": [
@@ -1335,7 +1395,13 @@ class JarvisLive:
 
         memory     = load_memory()
         mem_str    = format_memory_for_prompt(memory)
-        sys_prompt = _load_system_prompt()
+        try:
+            sys_prompt = pattern_learner.add_hints_to_prompt(
+                _load_system_prompt(), self._last_user_text or None
+            )
+        except (OSError, ValueError) as exc:
+            logging.getLogger(__name__).warning("Pattern hints unavailable: %s", exc)
+            sys_prompt = _load_system_prompt()
 
         now      = datetime.now()
         time_str = now.strftime("%A, %B %d, %Y — %I:%M %p")
@@ -1688,6 +1754,9 @@ class JarvisLive:
             traceback.print_exc()
             self.speak_error(name, e)
 
+        if isinstance(result, str):
+            self._observe_pattern_tool_result(name, args, result)
+
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
@@ -1956,6 +2025,7 @@ class JarvisLive:
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
+                                self._observe_pattern_feedback(full_in)
                                 self._last_user_text = full_in
                                 self._recent_user_texts.append(full_in)
                                 self._schedule_geo_route(full_in)
