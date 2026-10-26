@@ -24,6 +24,7 @@ _CONTEXTS = {
     "auto": re.compile(r"\b(auto|macchina|macchine|automobile|automobili|car|cars|vehicle|vehicles)\b", re.I),
     "sedia": re.compile(r"\b(sedia|sedie|chair|chairs)\b", re.I),
     "mela": re.compile(r"\b(mela|mele|apple|apples)\b", re.I),
+    "pc": re.compile(r"\b(pc|computer|personal computer)\b", re.I),
 }
 _CORRECTION = re.compile(
     r"\b(no|rifai|rifallo|riprova|sbagliat\w*|non va|non mi piace|non è corretto|cambia)\b",
@@ -42,6 +43,8 @@ _STYLE_ALIASES = {
 _STYLE_PATTERN = re.compile(
     r"preferred:([a-z]+);previous:([a-z]+)", re.I
 )
+_MODEL_PATH = re.compile(r"(?:^|[/\\])([^/\\]+)\.(?:glb|gltf)$", re.I)
+_SAFE_CONTEXT = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
 
 
 def enabled() -> bool:
@@ -57,6 +60,11 @@ def context_for(text: str | None) -> str:
 
 
 def model_context_for(text: str | None) -> str:
+    value = str(text or "").strip()
+    model_path = _MODEL_PATH.search(value)
+    if model_path:
+        model_name = model_path.group(1).casefold()
+        return model_name if _SAFE_CONTEXT.fullmatch(model_name) else "3d"
     context = context_for(text)
     return "3d" if context == "general" else context
 
@@ -68,7 +76,14 @@ def style_for_text(text: str | None) -> str | None:
 
 def _normalize_context(value: str | None) -> str:
     context = str(value or "").strip().casefold()
-    return context if context in {*_CONTEXTS, "3d", "general"} else context_for(context)
+    if context in {*_CONTEXTS, "3d", "general"}:
+        return context
+    inferred = context_for(context)
+    if inferred != "general":
+        return inferred
+    if _SAFE_CONTEXT.fullmatch(context):
+        return context
+    return inferred
 
 
 def _normalize_observation(pattern_type: str, observation: str) -> str:
@@ -77,7 +92,7 @@ def _normalize_observation(pattern_type: str, observation: str) -> str:
         if not match:
             raise ValueError("Style observations must use preferred:<style>;previous:<style>")
         preferred, previous = (item.casefold() for item in match.groups())
-        if preferred not in STYLES or (previous not in STYLES and previous != "unknown"):
+        if preferred not in STYLES or (previous not in STYLES and previous not in {"none", "unknown"}):
             raise ValueError("Unsupported style in pattern observation")
         return f"preferred:{preferred};previous:{previous}"
     if pattern_type == "tool_failure":
@@ -217,8 +232,8 @@ def observe_style_preference(
     previous_style: str | None = None,
 ) -> list[dict]:
     preferred = str(preferred_style or "").casefold()
-    previous = str(previous_style or "unknown").casefold()
-    if preferred not in STYLES or (previous not in STYLES and previous != "unknown"):
+    previous = str(previous_style).casefold() if previous_style else "none"
+    if preferred not in STYLES or (previous not in STYLES and previous not in {"none", "unknown"}):
         return []
     return observe(
         "style_preference",
@@ -284,7 +299,7 @@ def _hint_for(pattern: dict) -> str:
             return ""
         preferred, previous = match.groups()
         subject = "3D models" if context == "3d" else f"{context} models"
-        if previous == "unknown":
+        if previous in {"none", "unknown"}:
             return f"For {subject}, prefer {preferred} style."
         return f"For {subject}, prefer {preferred} over {previous}."
     if pattern["type"] == "tool_failure":

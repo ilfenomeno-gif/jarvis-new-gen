@@ -58,6 +58,57 @@ def test_three_style_corrections_are_injected_for_the_next_similar_object(patter
     assert len(pattern_learner.get_hints_for("a similar car")) <= 200
 
 
+def test_model_context_uses_cad_filename_and_none_is_a_valid_previous_style(pattern_store):
+    assert pattern_learner.model_context_for("cad/pc.glb") == "pc"
+    assert pattern_learner.model_context_for(r"cad\pc.glb") == "pc"
+
+    pattern = pattern_learner.observe_style_preference("pc", "realistic", previous_style=None)[0]
+
+    assert pattern["context"] == "pc"
+    assert pattern["observation"] == "preferred:realistic;previous:none"
+    assert pattern["occurrences"] == 1
+
+
+def test_live_dispatcher_tracks_loaded_pc_style_observations(pattern_store):
+    import main as jarvis_main
+
+    jarvis = object.__new__(jarvis_main.JarvisLive)
+    jarvis._last_user_text = "carica il PC CAD"
+    jarvis._observe_pattern_tool_result(
+        "viewer_3d",
+        {"mode": "load_model", "model": "cad/pc.glb"},
+        "Model cad/pc.glb loaded.",
+    )
+    for style in ("realistic", "blueprint", "realistic"):
+        jarvis._observe_pattern_tool_result(
+            "viewer_3d",
+            {"mode": "set_material_style", "style": style},
+            f"Material style set to {style}.",
+        )
+
+    realistic = next(
+        item for item in pattern_learner.list_patterns()
+        if item["observation"].startswith("preferred:realistic;")
+    )
+    assert realistic["context"] == "pc"
+    assert realistic["observation"] == "preferred:realistic;previous:none"
+    assert realistic["occurrences"] == 2
+    assert realistic["confidence"] == 0.6
+
+    jarvis._observe_pattern_tool_result(
+        "viewer_3d",
+        {"mode": "set_material_style", "style": "realistic"},
+        "Material style set to realistic.",
+    )
+    realistic = next(
+        item for item in pattern_learner.list_patterns()
+        if item["observation"].startswith("preferred:realistic;")
+    )
+    assert realistic["occurrences"] == 3
+    assert realistic["confidence"] == 0.9
+    assert "prefer realistic style" in pattern_learner.get_hints_for("cad/pc.glb")
+
+
 def test_live_system_prompt_uses_repeated_style_corrections(pattern_store, tmp_path, monkeypatch):
     import main as jarvis_main
 

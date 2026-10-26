@@ -1218,7 +1218,9 @@ class JarvisLive:
             elif name == "generate_3d_model" and not result.startswith(
                 ("Tool 'generate_3d_model' failed:", "3D generation failed", "Invalid request")
             ):
-                context = pattern_learner.model_context_for(args.get("prompt") or self._last_user_text)
+                context = pattern_learner.model_context_for(
+                    args.get("model") or args.get("prompt") or self._last_user_text
+                )
                 style = (
                     pattern_learner.style_for_text(args.get("style"))
                     or pattern_learner.style_for_text(result)
@@ -1226,15 +1228,26 @@ class JarvisLive:
                 )
                 self._pattern_context = context
                 self._pattern_style = style
-            elif name == "viewer_3d" and str(args.get("mode") or "").casefold() == "set_material_style":
-                style = pattern_learner.style_for_text(args.get("style"))
-                if style:
-                    context = getattr(self, "_pattern_context", "") or pattern_learner.context_for(self._last_user_text)
-                    pattern_learner.observe_style_preference(
-                        context, style, getattr(self, "_pattern_style", None)
+            elif name == "viewer_3d":
+                mode = str(args.get("mode") or "").casefold()
+                if mode == "load_model":
+                    self._pattern_context = pattern_learner.model_context_for(
+                        args.get("model") or self._last_user_text
                     )
-                    self._pattern_context = context
-                    self._pattern_style = style
+                    self._pattern_style = None
+                elif mode == "set_material_style":
+                    style = pattern_learner.style_for_text(args.get("style"))
+                    if style:
+                        context = getattr(self, "_pattern_context", "") or pattern_learner.model_context_for(
+                            self._last_user_text
+                        )
+                        pattern_learner.observe_style_preference(
+                            context,
+                            style,
+                            getattr(self, "_pattern_style", None),
+                        )
+                        self._pattern_context = context
+                        self._pattern_style = style
             elif name != "viewer_3d":
                 self._pattern_context = pattern_learner.context_for(self._last_user_text)
                 self._pattern_style = None
