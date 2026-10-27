@@ -8,6 +8,7 @@ _MODES = (
     "explode_model", "highlight_part", "set_hologram",
     "set_material_style", "set_part_info", "list_parts", "list_models", "hovered_part",
     "set_controls", "set_clipping",
+    "apply_physics",
 )
 
 
@@ -43,6 +44,10 @@ def viewer_3d(parameters: dict, player=None, **_ignored) -> str:
             position = params.get("position", 0.5)
             player.viewer3d_call("setClipping", [axis, position])
             return "Clipping removed." if axis in ("off", "none") else f"Clipping enabled on {axis} at {position}."
+        if mode == "apply_physics":
+            physics_mode = str(params.get("physics_mode") or "").strip().lower()
+            player.viewer3d_call("applyPhysics", [physics_mode])
+            return f"Physics {physics_mode} applied to the loaded model."
         if mode == "list_models":
             from core.viewer3d import list_models
             found = list_models()
@@ -159,7 +164,10 @@ TOOL = {
         "always exists: for 'explain/take apart a PC' call load_model with model=cad/pc.glb, "
         "then explode_model; never say it is missing. set_clipping (axis=x|y|z|off, "
         "position=0..1) cuts the loaded model in its local bounds, adds a stencil cap, "
-        "and disables spin while the cut is active."
+        "and disables spin while the cut is active. apply_physics (physics_mode=drop|impulse) "
+        "drops the loaded model onto the viewer floor or applies a fixed upward impulse; "
+        "applying physics to an exploded model reassembles it first, and exploding a "
+        "physics-driven model stops physics and restores its original pose."
     ),
     "risk_class": "read",
     "parameters": {
@@ -178,6 +186,7 @@ TOOL = {
             "part_info": {"type": "STRING", "description": "For set_part_info: JSON object text, part name -> description."},
             "axis": {"type": "STRING", "description": "For set_clipping: x, y, z, or off."},
             "position": {"type": "NUMBER", "description": "For set_clipping: cut position from 0 to 1 (default 0.5)."},
+            "physics_mode": {"type": "STRING", "description": "For apply_physics: drop or impulse."},
         },
         "required": ["mode"],
     },

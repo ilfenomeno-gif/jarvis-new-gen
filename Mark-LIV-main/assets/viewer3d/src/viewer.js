@@ -4,12 +4,111 @@ import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
+import * as RAPIER from "@dimforge/rapier3d-compat";
 
 const state = {
   markers: [], target: null, spin: true, ready: false, flights: null,
   model: null, modelStatus: "none", modelError: "", shaderError: "", partInfo: {},
   style: "hologram", controlsOn: true,
 };
+const PHYSICS_STEP = 1 / 60;
+const PHYSICS_MAX_SUBSTEPS = 4;
+const PHYSICS_DROP_HEIGHT = 2;
+const PHYSICS_IMPULSE = 4;
+const physics = {
+  status: "loading", mode: "idle", error: "", world: null,
+  activeModel: null, accumulator: 0, disposed: false,
+};
+RAPIER.init().then(() => {
+  if (physics.disposed) return;
+  physics.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  physics.world.timestep = PHYSICS_STEP;
+  const floor = physics.world.createRigidBody(
+    RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.025, 0)
+  );
+  physics.world.createCollider(
+    RAPIER.ColliderDesc.cuboid(100, 0.025, 100).setFriction(0.8),
+    floor
+  );
+  physics.status = "ready";
+}).catch((error) => {
+  physics.status = "error";
+  physics.error = String(error && error.message || error).slice(0, 240);
+});
+
+function resetExplodedParts(model) {
+  model.parts.forEach(part => part.node.position.copy(part.origin));
+  model.explode = 0;
+  model.explodeTo = 0;
+}
+
+function stopModelPhysics(model, restorePose) {
+  if (!model || !model.physicsBody) return;
+  if (physics.world) physics.world.removeRigidBody(model.physicsBody);
+  model.physicsBody = null;
+  if (restorePose && model.physicsHome) {
+    model.group.position.copy(model.physicsHome.position);
+    model.group.quaternion.copy(model.physicsHome.rotation);
+    model.group.updateMatrixWorld(true);
+  }
+  model.physicsHome = null;
+  if (physics.activeModel === model) {
+    physics.activeModel = null;
+    physics.mode = "idle";
+    physics.accumulator = 0;
+  }
+}
+
+function disposePhysics() {
+  physics.disposed = true;
+  if (physics.activeModel) stopModelPhysics(physics.activeModel, false);
+  if (physics.world) physics.world.free();
+  physics.world = null;
+  physics.status = "disposed";
+}
+
+window.addEventListener("pagehide", disposePhysics, { once: true });
+
+function createPhysicsBody(model) {
+  const world = physics.world;
+  if (!world || physics.status !== "ready") {
+    throw new Error(physics.error || "Rapier WebAssembly is not ready");
+  }
+  const rotation = model.group.quaternion.clone();
+  const position = model.group.position.clone();
+  model.physicsHome = { position: position.clone(), rotation: rotation.clone() };
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(position.x, position.y + PHYSICS_DROP_HEIGHT, position.z)
+      .setRotation({ x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w })
+  );
+  const [x, y, z] = model.physicsHalfExtents;
+  world.createCollider(
+    RAPIER.ColliderDesc.cuboid(x, y, z).setFriction(0.8).setRestitution(0.05),
+    body
+  );
+  model.physicsBody = body;
+  physics.activeModel = model;
+  return body;
+}
+
+function stepPhysics(dt) {
+  const model = physics.activeModel;
+  if (!physics.world || !model || !model.physicsBody) return;
+  physics.accumulator += Math.min(dt, 0.1);
+  let steps = 0;
+  while (physics.accumulator >= PHYSICS_STEP && steps < PHYSICS_MAX_SUBSTEPS) {
+    physics.world.step();
+    physics.accumulator -= PHYSICS_STEP;
+    steps++;
+  }
+  if (steps === PHYSICS_MAX_SUBSTEPS) physics.accumulator = 0;
+  const position = model.physicsBody.translation();
+  const rotation = model.physicsBody.rotation();
+  model.group.position.set(position.x, position.y, position.z);
+  model.group.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+  model.group.updateMatrixWorld(true);
+}
 const canvas = document.getElementById("c");
 // Senza WebGL (GPU in blocklist) il viewer resta controllabile ma non disegna.
 let renderer = null;
@@ -408,6 +507,7 @@ function frame(now) {
     if (Math.abs(m.explodeTo - m.explode) < 0.002) m.explode = m.explodeTo;
     m.parts.forEach(p => p.node.position.copy(p.origin).addScaledVector(p.dir, p.dist * m.explode));
   }
+  stepPhysics(dt);
   pickPart(now);
   if (controls.enabled) controls.update();
   if (renderer) renderClippedScene();
@@ -807,7 +907,17 @@ window.jarvisViewer = {
         group.scale.setScalar(scale);
         scene.add(group);
         group.updateMatrixWorld(true);
-        state.model = { group, root, name, meshes: meshesOf(root), parts: collectParts(root, Math.max(size.x, size.y, size.z) || 1), explode: 0, explodeTo: 0, highlight: "", holo: [], hologram: false, style: "hologram" };
+        state.model = {
+          group, root, name, meshes: meshesOf(root),
+          parts: collectParts(root, Math.max(size.x, size.y, size.z) || 1),
+          physicsHalfExtents: [
+            Math.max(size.x * scale / 2, 0.02),
+            Math.max(size.y * scale / 2, 0.02),
+            Math.max(size.z * scale / 2, 0.02),
+          ],
+          physicsBody: null, physicsHome: null,
+          explode: 0, explodeTo: 0, highlight: "", holo: [], hologram: false, style: "hologram",
+        };
         createClipResources(state.model, box.clone().translate(center.clone().negate()));
         applyStyle(state.model, state.style);
         syncClip();
@@ -839,7 +949,45 @@ window.jarvisViewer = {
     syncClip();
   },
   explodeModel(on) {
-    if (state.model) state.model.explodeTo = on ? 1 : 0;
+    const model = state.model;
+    if (!model) return;
+    if (on) {
+      stopModelPhysics(model, true);
+      resetExplodedParts(model);
+    }
+    model.explodeTo = on ? 1 : 0;
+  },
+  applyPhysics(mode) {
+    mode = String(mode || "").toLowerCase();
+    if (mode !== "drop" && mode !== "impulse") {
+      throw new Error("physics mode must be drop or impulse");
+    }
+    if (physics.status !== "ready") {
+      throw new Error(physics.error || "Rapier WebAssembly is not ready");
+    }
+    const model = state.model;
+    if (!model) throw new Error("no model loaded");
+    resetExplodedParts(model);
+    state.spin = false;
+    const body = model.physicsBody || createPhysicsBody(model);
+    if (mode === "drop") {
+      const home = model.physicsHome;
+      body.setTranslation({
+        x: home.position.x,
+        y: home.position.y + PHYSICS_DROP_HEIGHT,
+        z: home.position.z,
+      }, true);
+      body.setRotation({
+        x: home.rotation.x, y: home.rotation.y,
+        z: home.rotation.z, w: home.rotation.w,
+      }, true);
+      body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    } else {
+      body.applyImpulse({ x: 0, y: PHYSICS_IMPULSE, z: 0 }, true);
+    }
+    physics.activeModel = model;
+    physics.mode = mode;
   },
   highlightPart(name) {
     const m = state.model;
@@ -880,6 +1028,7 @@ window.jarvisViewer = {
   removeModel() {
     loadToken++;
     if (state.model) {
+      stopModelPhysics(state.model, false);
       scene.remove(state.model.group);
       clipCapsScene.remove(state.model.clipCap);
       state.model.clipBackMaterial.dispose();
@@ -927,6 +1076,22 @@ window.jarvisViewer = {
           normal: state.model.clipWorldPlane.normal.toArray().map(value => Number(value.toFixed(3))),
           constant: Number(state.model.clipWorldPlane.constant.toFixed(3)),
         }] : [],
+      },
+      physics: {
+        status: physics.status,
+        mode: physics.mode,
+        error: physics.error,
+        active: !!(physics.activeModel && physics.activeModel.physicsBody),
+        position: physics.activeModel && physics.activeModel.physicsBody
+          ? (() => {
+            const value = physics.activeModel.physicsBody.translation();
+            return { x: value.x, y: value.y, z: value.z };
+          })() : null,
+        velocityY: physics.activeModel && physics.activeModel.physicsBody
+          ? physics.activeModel.physicsBody.linvel().y : 0,
+        bottom: physics.activeModel && physics.activeModel.physicsBody
+          ? physics.activeModel.physicsBody.translation().y - physics.activeModel.physicsHalfExtents[1]
+          : null,
       },
       look: { environment: !!scene.environment, envLoaded: !!envMap, envError: state.envError || "", shadows: keyLight.castShadow, shadowFloor: shadowFloor.visible, toneMapping: renderer ? renderer.toneMapping : 0, shadowCasters: state.model ? state.model.meshes.filter(o => o.castShadow).length : 0 },
       model: {
