@@ -12,7 +12,7 @@ from pathlib import Path
 
 PATTERNS_PATH = Path(__file__).resolve().parent.parent / "memory" / "learned_patterns.json"
 ENABLED_ENV = "JARVIS_PATTERN_LEARNER"
-PATTERN_TYPES = frozenset({"style_preference", "tool_failure", "correction"})
+PATTERN_TYPES = frozenset({"style_preference", "tool_failure", "correction", "app_launch"})
 STYLES = frozenset({"blueprint", "realistic", "toon", "flat", "hologram"})
 MAX_PATTERNS = 100
 MAX_HINTS = 3
@@ -45,6 +45,7 @@ _STYLE_PATTERN = re.compile(
 )
 _MODEL_PATH = re.compile(r"(?:^|[/\\])([^/\\]+)\.(?:glb|gltf)$", re.I)
 _SAFE_CONTEXT = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
+_SAFE_APP_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 
 
 def enabled() -> bool:
@@ -99,6 +100,11 @@ def _normalize_observation(pattern_type: str, observation: str) -> str:
         return "fallback:generate_3d_model"
     if pattern_type == "correction":
         return "corrected_output"
+    if pattern_type == "app_launch":
+        normalized = str(observation or "").strip().casefold()
+        if not _SAFE_APP_NAME.fullmatch(normalized):
+            raise ValueError("App launch observations must use a safe application identifier")
+        return normalized
     raise ValueError(f"Unsupported pattern type: {pattern_type}")
 
 
@@ -246,6 +252,13 @@ def observe_tool_failure(context: str) -> list[dict]:
     return observe("tool_failure", context, "fallback:generate_3d_model")
 
 
+def observe_app_launch(context: str, app_name: str) -> list[dict]:
+    identifier = re.sub(r"[^a-z0-9._-]+", "", str(app_name or "").casefold())
+    if not identifier or not _SAFE_APP_NAME.fullmatch(identifier):
+        return []
+    return observe("app_launch", context, identifier)
+
+
 def observe_correction(
     context: str,
     text: str,
@@ -293,6 +306,10 @@ def clear() -> int:
 
 def _hint_for(pattern: dict) -> str:
     context = pattern["context"]
+    if pattern["type"] == "app_launch":
+        if context == "general":
+            return f"Frequently launched application: {pattern['observation']}."
+        return f"For {context}, frequently launched application: {pattern['observation']}."
     if pattern["type"] == "style_preference":
         match = _STYLE_PATTERN.fullmatch(pattern["observation"])
         if match is None:
@@ -315,7 +332,7 @@ def get_hints_for(current_context: str | None = None) -> str:
     if not enabled():
         return ""
     context = _normalize_context(current_context) if current_context else None
-    type_order = {"style_preference": 0, "tool_failure": 1, "correction": 2}
+    type_order = {"style_preference": 0, "tool_failure": 1, "correction": 2, "app_launch": 3}
     patterns = [
         item for item in list_patterns()
         if item["confidence"] >= 0.7

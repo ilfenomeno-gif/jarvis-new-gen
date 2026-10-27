@@ -35,6 +35,8 @@ def run(argv: list[str], runtime: Runtime | None, read_token: Callable[[str], st
     parser = argparse.ArgumentParser(prog="registry_cli")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
+    app_search = sub.add_parser("app-search")
+    app_search.add_argument("name")
     for name in ("connect", "revoke"):
         sub.add_parser(name).add_argument("connector")
     grant = sub.add_parser("grant")
@@ -64,6 +66,12 @@ def run(argv: list[str], runtime: Runtime | None, read_token: Callable[[str], st
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "app-search":
+            from actions import app_launcher
+            if not app_launcher.enabled():
+                return "error: app_launcher is disabled by JARVIS_APP_LAUNCHER=0"
+            executable = app_launcher.find_executable(args.name)
+            return str(executable) if executable else f"error: application '{args.name}' was not found"
         if args.command == "cache-3d":
             from core import local_3d_gen
             try:
@@ -173,7 +181,7 @@ def run(argv: list[str], runtime: Runtime | None, read_token: Callable[[str], st
 
 def main() -> int:
     argv = sys.argv[1:]
-    standalone = {"cache-3d", "patterns-list", "patterns-delete", "patterns-clear"}
+    standalone = {"app-search", "cache-3d", "patterns-list", "patterns-delete", "patterns-clear"}
     runtime = None if argv == ["reload_hud_states"] or (argv and argv[0] in standalone) else build_runtime()
     output = run(argv, runtime)
     print(output)

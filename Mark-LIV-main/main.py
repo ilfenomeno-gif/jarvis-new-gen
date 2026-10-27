@@ -200,9 +200,9 @@ TOOL_DECLARATIONS = [
     {
         "name": "open_app",
         "description": (
-            "Opens any application on the computer. "
-            "Use this whenever the user asks to open, launch, or start an app or "
-            "program. For websites, use open_website. This includes GeoGuessr and speech-recognition "
+            "Compatibility handler for websites, media files, and Steam handoffs. "
+            "For Windows desktop applications, use app_launcher and obtain explicit confirmation. "
+            "For websites, use open_website. This includes GeoGuessr and speech-recognition "
             "variants such as 'Gio Gasser', 'Jao Gasser', or 'Geo Guesser'; "
             "send those to Steam search instead of using web_search. "
             "Always call this tool — never just say you opened it."
@@ -1207,7 +1207,14 @@ class JarvisLive:
 
     def _observe_pattern_tool_result(self, name: str, args: dict, result: str) -> None:
         try:
-            if name == "search_3d_model":
+            if name == "app_launcher" and result.startswith(
+                ("Launch requested", "Launch started", "Launch completed")
+            ):
+                pattern_learner.observe_app_launch(
+                    pattern_learner.context_for(self._last_user_text),
+                    args.get("name", ""),
+                )
+            elif name == "search_3d_model":
                 context = pattern_learner.model_context_for(args.get("query") or self._last_user_text)
                 self._pattern_context = context
                 self._pattern_style = None

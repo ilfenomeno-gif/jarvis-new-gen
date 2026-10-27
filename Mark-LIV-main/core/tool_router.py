@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 ALWAYS = frozenset({"shutdown_jarvis", "undo", "use_skill"})
-BASE = frozenset({"web_search", "open_app", "system_status", "save_memory", "recall_memory", "ui_layout"})
+BASE = frozenset({"web_search", "open_app", "app_launcher", "system_status", "save_memory", "recall_memory", "ui_layout"})
 
 _GEV_TOOLS = frozenset({"gev"})  # gev_mcp_* are matched by prefix
 
@@ -70,6 +70,8 @@ GROUPS: tuple[Group, ...] = (
     _group("utility", r"calcol|quanto fa|convert|password|\bqr\b|calori|\bpasto|\bchat\b",
            {"calculator", "password_generator", "qr_code_generator", "calorie_counter", "gemini_chat"}),
     _group("proxy", r"proxy|\bvpn\b", {"proxy_launcher"}),
+    _group("applications", r"\b(apri|aprimi|avvia|avvii|lancia|launch|open|start)\b",
+           {"app_launcher"}),
     _group("games", r"gioc|\bgame|steam|\bepic\b", {"game_updater"}),
     _group("ui", r"pannell|panel|layout|focus|\bdock|workspace|nascondi|\bhide|mostra|\bshow|\blog\b|interfaccia|chiudi il|apri il",
            {"ui_layout"}),
