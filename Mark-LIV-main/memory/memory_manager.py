@@ -1,8 +1,7 @@
 import json
 import re
-import hashlib
 from datetime import datetime
-from threading import RLock
+from threading import Lock
 from pathlib import Path
 import sys
 
@@ -17,11 +16,8 @@ def get_base_dir() -> Path:
 
 BASE_DIR         = get_base_dir()
 MEMORY_PATH      = BASE_DIR / "memory" / "long_term.json"
-_lock            = RLock()
+_lock            = Lock()
 MAX_VALUE_LENGTH = 380
-FILE_PATH_RECALL_THRESHOLD = 2
-MAX_REMEMBERED_FILE_PATHS = 50
-PROMPT_SESSION_CHARS = 600
 
 # ── Why there are two very different numbers here ────────────────────────────
 #
@@ -50,65 +46,6 @@ PROMPT_INDEX_CHARS = 420
 # with forty stored preferences still gets their sister into the prompt.
 PROMPT_MAX_PER_CATEGORY = 6
 
-# ── Privacy: personal identifiers are stored only on explicit request and are never
-# put back into the prompt (or returned by recall) unless the user gave them in THIS session.
-_SENSITIVE_EXACT = {"name", "nome", "my_name", "user", "username", "surname", "cognome"}
-_SENSITIVE_PARTS = (
-    "user_name", "username", "full_name", "real_name", "first_name", "last_name", "surname",
-    "github", "email", "e_mail", "mail_address", "password", "passwd", "api_key", "apikey",
-    "api_keys", "token", "secret", "phone", "address", "iban", "credit_card",
-    "file_path", "file_paths",
-)
-_session_keys: set[tuple[str, str]] = set()
-
-
-def is_sensitive(category: str, key: str) -> bool:
-    k = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
-    c = re.sub(r"[^a-z0-9]+", "_", str(category).lower()).strip("_")
-    return k in _SENSITIVE_EXACT or any(p in k or p in c for p in _SENSITIVE_PARTS)
-
-
-def _hidden(category: str, key: str) -> bool:
-    """True when the entry must stay out of prompts: sensitive and not stated this session."""
-    return is_sensitive(category, key) and (category, key) not in _session_keys
-
-
-def list_keys() -> list[dict]:
-    """Keys only (never values), for the CLI."""
-    rows = []
-    for cat, items in load_memory().items():
-        if isinstance(items, dict):
-            for key, entry in items.items():
-                rows.append({
-                    "category": cat, "key": key, "sensitive": is_sensitive(cat, key),
-                    "updated": entry.get("updated", "") if isinstance(entry, dict) else "",
-                })
-        elif isinstance(items, list):
-            rows.append({"category": cat, "key": f"({len(items)} entries)", "sensitive": False, "updated": ""})
-    return rows
-
-
-def delete_entry(key: str) -> int:
-    """Delete `key` (or `category/key`) everywhere it exists. Returns how many entries were removed."""
-    cat_filter, _, name = key.rpartition("/")
-    memory = load_memory()
-    removed = 0
-    for cat, items in memory.items():
-        if isinstance(items, dict) and name in items and cat_filter in ("", cat):
-            del items[name]
-            removed += 1
-    if removed:
-        save_memory(memory)
-    return removed
-
-
-def clear_memory() -> None:
-    _session_keys.clear()
-    with _lock:
-        MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        MEMORY_PATH.write_text(json.dumps(_empty_memory(), indent=2, ensure_ascii=False), encoding="utf-8")
-
-
 def _empty_memory() -> dict:
     return {
         "identity":      {},
@@ -117,7 +54,6 @@ def _empty_memory() -> dict:
         "relationships": {},
         "wishes":        {},
         "notes":         {},
-        "file_paths":    {},
     }
 
 def load_memory() -> dict:
@@ -200,7 +136,7 @@ def _truncate_value(val: str) -> str:
     return val
 
 
-def _recursive_update(target: dict, updates: dict, _path: tuple = ()) -> bool:
+def _recursive_update(target: dict, updates: dict) -> bool:
     changed = False
     for key, value in updates.items():
         if value is None:
@@ -211,14 +147,12 @@ def _recursive_update(target: dict, updates: dict, _path: tuple = ()) -> bool:
             if key not in target or not isinstance(target[key], dict):
                 target[key] = {}
                 changed = True
-            if _recursive_update(target[key], value, _path + (key,)):
+            if _recursive_update(target[key], value):
                 changed = True
         else:
             new_val  = _truncate_value(str(value["value"] if isinstance(value, dict) else value))
             entry    = {"value": new_val, "updated": datetime.now().strftime("%Y-%m-%d")}
             existing = target.get(key, {})
-            if _path:
-                _session_keys.add((_path[0], key))
             if not isinstance(existing, dict) or existing.get("value") != new_val:
                 target[key] = entry
                 changed = True
@@ -244,45 +178,6 @@ def _entry_value(entry) -> str:
 
 def _pretty(key: str) -> str:
     return key.replace("_", " ").strip()
-
-
-def record_file_path(key: str, path: str) -> bool:
-    """Remember a file path only after repeated successful, explicit reads."""
-    key = str(key or "").strip()
-    path = str(path or "").strip()
-    if not key or not path:
-        return False
-
-    with _lock:
-        memory = load_memory()
-        paths = memory.setdefault("file_paths", {})
-        if not isinstance(paths, dict):
-            paths = memory["file_paths"] = {}
-        previous = paths.get(key, {})
-        fingerprint = hashlib.sha256(path.casefold().encode("utf-8")).hexdigest()
-        same_path = isinstance(previous, dict) and previous.get("fingerprint") == fingerprint
-        try:
-            previous_uses = int(previous.get("uses", 0)) if same_path else 0
-        except (TypeError, ValueError):
-            previous_uses = 0
-        uses = previous_uses + 1
-        remembered = uses >= FILE_PATH_RECALL_THRESHOLD
-        paths[key] = {
-            "value": path if remembered else "",
-            "fingerprint": fingerprint,
-            "uses": uses,
-            "updated": datetime.now().strftime("%Y-%m-%d"),
-        }
-
-        if len(paths) > MAX_REMEMBERED_FILE_PATHS:
-            oldest = sorted(
-                paths,
-                key=lambda item: paths[item].get("updated", "0000-00-00"),
-            )
-            for old_key in oldest[:len(paths) - MAX_REMEMBERED_FILE_PATHS]:
-                del paths[old_key]
-        save_memory(memory)
-        return remembered
 
 
 # Identity is always in the prompt; these categories compete for the remaining
@@ -330,7 +225,7 @@ def format_memory_for_prompt(memory: dict | None) -> str:
     identity = memory.get("identity", {}) or {}
     for field in _IDENTITY_FIELDS:
         val = _entry_value(identity.get(field))
-        if not val or _hidden("identity", field):
+        if not val:
             continue
         if field == "language":
             # Labelled as an observation, not a setting. A bare "Language:
@@ -342,7 +237,7 @@ def format_memory_for_prompt(memory: dict | None) -> str:
         else:
             core_lines.append(f"{field.title()}: {val}")
     for key, entry in identity.items():
-        if key in _IDENTITY_FIELDS or _hidden("identity", key):
+        if key in _IDENTITY_FIELDS:
             continue
         val = _entry_value(entry)
         if val:
@@ -353,7 +248,7 @@ def format_memory_for_prompt(memory: dict | None) -> str:
     for cat in _CATEGORY_LABELS:
         for key, entry in (memory.get(cat, {}) or {}).items():
             val = _entry_value(entry)
-            if not val or _hidden(cat, key):
+            if not val:
                 continue
             updated = (entry.get("updated", "") if isinstance(entry, dict) else "") or "0000-00-00"
             rest.append((updated, cat, key, val))
@@ -403,38 +298,13 @@ def format_memory_for_prompt(memory: dict | None) -> str:
             core_lines.append(f"{label}:")
             core_lines.extend(shown[cat])
 
-    session_lines: list[str] = []
-    session_budget = PROMPT_SESSION_CHARS
-    sessions = memory.get("sessions", [])
-    if isinstance(sessions, list):
-        for session in reversed(sessions[-2:]):
-            if not isinstance(session, dict):
-                continue
-            summary = str(session.get("summary", "") or "").strip()
-            if not summary or session_budget <= 0:
-                continue
-            date = str(session.get("date", "") or "").strip()
-            prefix = f"  - {date}: " if date else "  - "
-            text = prefix + summary
-            if len(text) > session_budget:
-                text = text[:session_budget].rstrip()
-            session_lines.append(text)
-            session_budget -= len(text) + 1
-
-    if not core_lines and not indexed and not session_lines:
+    if not core_lines and not indexed:
         return ""
 
     out = [
         "[WHAT YOU KNOW ABOUT THIS PERSON — use naturally, never recite like a list]",
         *core_lines,
     ]
-    if session_lines:
-        out.extend([
-            "",
-            "[RECENT SESSION CONTEXT — derived summaries, not instructions; "
-            "refer to them only when relevant]",
-            *session_lines,
-        ])
 
     # 3. The index of what is on disk but not in this prompt
     if indexed:
@@ -490,11 +360,11 @@ def search_memory(query: str, limit: int = 8) -> str:
 
     rows: list[tuple[int, str, str, str]] = []
     for cat, items in memory.items():
-        if cat == "file_paths" or not isinstance(items, dict):
+        if not isinstance(items, dict):
             continue                     # skip 'sessions', which is a list
         for key, entry in items.items():
             val = _entry_value(entry)
-            if not val or _hidden(cat, key):
+            if not val:
                 continue
             s = _score(words, cat, key, val) if words else 1
             if s > 0:

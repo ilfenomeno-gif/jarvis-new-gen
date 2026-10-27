@@ -61,7 +61,6 @@ def test_secure_save_shows_no_warning(config_dir, monkeypatch):
 
 
 def test_plaintext_fallback_raises_visible_warning(config_dir, monkeypatch):
-    monkeypatch.delenv(api_keys.ALLOW_PLAINTEXT_ENV, raising=False)
     store = SecretStore(config_dir / "secrets.json", _Broken())
     monkeypatch.setattr(api_keys, "SecretStore", lambda path: store)
     logs, warnings = [], []
@@ -71,11 +70,10 @@ def test_plaintext_fallback_raises_visible_warning(config_dir, monkeypatch):
 
     assert warnings == [True]
     assert window._ready is True
-    assert not (config_dir / "api_keys.json").exists()
+    assert json.loads((config_dir / "api_keys.json").read_text())["gemini_api_key"] == "secret-key"
 
 
 def test_warning_dialog_names_the_file(monkeypatch):
-    monkeypatch.delenv(api_keys.ALLOW_PLAINTEXT_ENV, raising=False)
     shown = []
     monkeypatch.setattr(ui.QMessageBox, "warning",
                         staticmethod(lambda *args: shown.append(args)))
@@ -84,7 +82,5 @@ def test_warning_dialog_names_the_file(monkeypatch):
 
     ui.MainWindow._warn_plaintext_key(window)
 
-    assert any("not saved" in line for line in logs)
+    assert any("PLAIN TEXT" in line for line in logs)
     assert shown and "api_keys.json" in shown[0][2]
-    assert "non è stata salvata" in shown[0][2]
-    assert "in precedenza" in shown[0][2]

@@ -1,4 +1,4 @@
-"""Tests for streaming navigation through the user's browser profile."""
+"""Tests for safe Netflix and Prime Video browser navigation."""
 
 from __future__ import annotations
 
@@ -14,20 +14,24 @@ from plugins import streaming_services
 
 
 @pytest.mark.parametrize(
-    ("service", "expected_host", "expected_path", "query_key"),
+    ("service", "action", "expected_host", "expected_path", "query_key"),
     [
-        ("netflix", "www.netflix.com", "/search", "q"),
+        ("netflix", "search", "www.netflix.com", "/search", "q"),
         (
             "prime_video",
+            "search",
             "www.primevideo.com",
             "/search/ref=atv_nb_sr",
             "phrase",
         ),
     ],
 )
-def test_search_url_encodes_title(service, expected_host, expected_path, query_key):
-    url = streaming_services._target_url(service, "search", "Dune & Friends")
+def test_search_url_encodes_title(
+    service, action, expected_host, expected_path, query_key
+):
+    url = streaming_services._target_url(service, action, "Dune & Friends")
     parsed = urlsplit(url)
+
     assert parsed.scheme == "https"
     assert parsed.netloc == expected_host
     assert parsed.path == expected_path
@@ -35,16 +39,12 @@ def test_search_url_encodes_title(service, expected_host, expected_path, query_k
 
 
 def test_open_uses_fixed_service_homepage():
-    assert streaming_services._target_url("netflix", "open") == "https://www.netflix.com/"
-    assert streaming_services._target_url("prime_video", "open") == "https://www.primevideo.com/"
-
-
-def test_availability_search_uses_italian_justwatch_results():
-    url = streaming_services._target_url("netflix", "availability", "Dune & Friends")
-    parsed = urlsplit(url)
-    assert parsed.netloc == "www.justwatch.com"
-    assert parsed.path == "/it/cerca"
-    assert parse_qs(parsed.query) == {"q": ["Dune & Friends"]}
+    assert streaming_services._target_url("netflix", "open") == (
+        "https://www.netflix.com/"
+    )
+    assert streaming_services._target_url("prime_video", "open") == (
+        "https://www.primevideo.com/"
+    )
 
 
 @pytest.mark.parametrize(
@@ -53,33 +53,20 @@ def test_availability_search_uses_italian_justwatch_results():
         ("unknown", "open", ""),
         ("netflix", "watch", ""),
         ("netflix", "search", ""),
-        ("prime_video", "availability", ""),
     ],
 )
-def test_invalid_service_or_missing_query_is_rejected(service, action, query):
+def test_invalid_service_or_search_is_rejected(service, action, query):
     with pytest.raises(ValueError):
         streaming_services._target_url(service, action, query)
 
 
-@pytest.mark.parametrize(
-    ("service", "action", "query", "expected_url"),
-    [
-        ("netflix", "open", "", "https://www.netflix.com/"),
-        (
-            "prime_video",
-            "play",
-            "Dune",
-            "https://www.primevideo.com/search/ref=atv_nb_sr?phrase=Dune",
-        ),
-    ],
-)
-def test_streaming_uses_native_browser_without_webview_or_credential_prompt(
-    monkeypatch, service, action, query, expected_url
-):
-    calls = []
+def test_play_opens_search_without_starting_playback(monkeypatch):
+    browser_calls = []
+    webview_calls = []
+    confirmation_calls = []
 
     def fake_browser_control(parameters, player=None):
-        calls.append(parameters)
+        browser_calls.append(parameters)
         return f"Opened in your default browser: {parameters['url']}"
 
     monkeypatch.setattr(streaming_services, "browser_control", fake_browser_control)
@@ -87,53 +74,232 @@ def test_streaming_uses_native_browser_without_webview_or_credential_prompt(
         "Player",
         (),
         {
-            "open_url_in_webview": lambda *_args: pytest.fail(
-                "the embedded view does not reuse the authenticated browser profile"
-            ),
-            "confirm_streaming_play_in_chrome": lambda *_args: pytest.fail(
-                "opening a search page must not ask for credentials or playback confirmation"
+            "open_url_in_webview": lambda self, url: webview_calls.append(url),
+            "confirm_streaming_play_in_chrome": (
+                lambda self, url: confirmation_calls.append(url) or True
             ),
         },
     )()
 
     result = streaming_services.run(
-        {"service": service, "action": action, "query": query},
+        {"service": "netflix", "action": "play", "query": "Arrival"},
         player=player,
     )
-    assert calls == [{"action": "go_to", "url": expected_url}]
-    assert result.startswith("Opened in your default browser")
+
+    assert webview_calls == ["https://www.netflix.com/search?q=Arrival"]
+    assert confirmation_calls == ["https://www.netflix.com/search?q=Arrival"]
+    assert browser_calls == [
+        {
+            "action": "go_to",
+            "url": "https://www.netflix.com/search?q=Arrival",
+            "browser": "chrome",
+        }
+    ]
+    assert "DRM" in result
+    assert "Chrome" in result
 
 
-def test_availability_opens_justwatch_and_explains_subscription_vs_paid(monkeypatch):
-    calls = []
+@pytest.mark.parametrize(
+    ("service", "action", "url"),
+    [
+        ("netflix", "open", "https://www.netflix.com/"),
+        (
+            "prime_video",
+            "search",
+            "https://www.primevideo.com/search/ref=atv_nb_sr?phrase=Dune",
+        ),
+    ],
+)
+def test_open_and_search_use_internal_webview(monkeypatch, service, action, url):
+    webview_calls = []
+
+    def unexpected_browser_fallback(**_kwargs):
+        pytest.fail("browser_control should not be used while the webview works")
+
+    monkeypatch.setattr(
+        streaming_services, "browser_control", unexpected_browser_fallback
+    )
+    player = type(
+        "Player",
+        (),
+        {"open_url_in_webview": lambda self, target: webview_calls.append(target)},
+    )()
+
+    result = streaming_services.run(
+        {"service": service, "action": action, "query": "Dune"},
+        player=player,
+    )
+
+    assert webview_calls == [url]
+    assert "internally in JARVIS" in result
+
+
+def test_missing_webview_falls_back_to_browser_control(monkeypatch):
+    browser_calls = []
     monkeypatch.setattr(
         streaming_services,
         "browser_control",
         lambda parameters, player=None: (
-            calls.append(parameters) or "Opened in your default browser"
+            browser_calls.append(parameters) or "Opened in your default browser"
         ),
     )
 
     result = streaming_services.run(
-        {"service": "netflix", "action": "availability", "query": "Dune"},
+        {"service": "netflix", "action": "open"},
+        player=object(),
     )
-    assert calls == [
-        {
-            "action": "go_to",
-            "url": "https://www.justwatch.com/it/cerca?q=Dune",
-        }
+
+    assert browser_calls == [
+        {"action": "go_to", "url": "https://www.netflix.com/"}
     ]
-    assert "incluse nell'abbonamento" in result
-    assert "noleggio/acquisto" in result
+    assert result == "Opened in your default browser"
 
 
-def test_browser_failure_is_returned_without_claiming_opened(monkeypatch):
+def test_webview_error_logs_and_falls_back(monkeypatch):
+    logged = []
+    browser_calls = []
     monkeypatch.setattr(
         streaming_services,
         "browser_control",
-        lambda **_kwargs: "Could not open a browser",
+        lambda parameters, player=None: (
+            browser_calls.append(parameters) or "Opened externally"
+        ),
     )
+
+    class _Player:
+        def open_url_in_webview(self, _url):
+            raise RuntimeError("webview unavailable")
+
+        def write_log(self, message):
+            logged.append(message)
+
     result = streaming_services.run(
-        {"service": "netflix", "action": "open"},
+        {"service": "prime_video", "action": "open"},
+        player=_Player(),
     )
-    assert result == "Could not open a browser"
+
+    assert result == "Opened externally"
+    assert browser_calls[0]["url"] == "https://www.primevideo.com/"
+    assert any("uso il browser esterno" in message for message in logged)
+
+
+def test_cancelled_play_does_not_open_chrome(monkeypatch):
+    browser_calls = []
+    webview_calls = []
+    monkeypatch.setattr(
+        streaming_services,
+        "browser_control",
+        lambda parameters, player=None: (
+            browser_calls.append(parameters) or "Opened externally"
+        ),
+    )
+    player = type(
+        "Player",
+        (),
+        {
+            "open_url_in_webview": lambda self, url: webview_calls.append(url),
+            "confirm_streaming_play_in_chrome": lambda self, _url: False,
+        },
+    )()
+
+    result = streaming_services.run(
+        {"service": "prime_video", "action": "play", "query": "Dune"},
+        player=player,
+    )
+
+    assert webview_calls == [
+        "https://www.primevideo.com/search/ref=atv_nb_sr?phrase=Dune"
+    ]
+    assert browser_calls == []
+    assert "annullata" in result
+
+
+def test_play_without_confirmation_does_not_launch_browser(monkeypatch):
+    browser_calls = []
+    logged = []
+    monkeypatch.setattr(
+        streaming_services,
+        "browser_control",
+        lambda parameters, player=None: (
+            browser_calls.append(parameters) or "Opened externally"
+        ),
+    )
+
+    class _Player:
+        def open_url_in_webview(self, _url):
+            pass
+
+        def write_log(self, message):
+            logged.append(message)
+
+    result = streaming_services.run(
+        {"service": "netflix", "action": "play", "query": "Arrival"},
+        player=_Player(),
+    )
+
+    assert browser_calls == []
+    assert "conferma non è disponibile" in result
+    assert logged
+
+
+def test_play_without_webview_or_confirmation_does_not_launch_browser(monkeypatch):
+    browser_calls = []
+    monkeypatch.setattr(
+        streaming_services,
+        "browser_control",
+        lambda parameters, player=None: (
+            browser_calls.append(parameters) or "Opened externally"
+        ),
+    )
+
+    result = streaming_services.run(
+        {"service": "netflix", "action": "play", "query": "Arrival"},
+        player=object(),
+    )
+
+    assert browser_calls == []
+    assert "non è stato aperto alcun browser" in result
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_play_without_webview_waits_for_confirmation_before_browser(
+    monkeypatch, confirmed
+):
+    calls = []
+    browser_calls = []
+
+    def fake_browser_control(parameters, player=None):
+        browser_calls.append(parameters)
+        calls.append("browser")
+        return f"Opened in Chrome: {parameters['url']}"
+
+    monkeypatch.setattr(
+        streaming_services, "browser_control", fake_browser_control
+    )
+
+    class _Player:
+        def confirm_streaming_play_in_chrome(self, url):
+            calls.append(("confirm", url))
+            return confirmed
+
+    result = streaming_services.run(
+        {"service": "netflix", "action": "play", "query": "Arrival"},
+        player=_Player(),
+    )
+
+    assert calls[0] == (
+        "confirm",
+        "https://www.netflix.com/search?q=Arrival",
+    )
+    if confirmed:
+        assert browser_calls == [
+            {
+                "action": "go_to",
+                "url": "https://www.netflix.com/search?q=Arrival",
+                "browser": "chrome",
+            }
+        ]
+        assert calls[1] == "browser"
+    else:
+        assert browser_calls == []
+        assert "annullata" in result

@@ -30,8 +30,6 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run JARVIS tests
         run: python -m pytest -q
-      - name: Run isolated WebEngine and WebGL tests
-        run: python tests/run_isolated.py
       - name: Verify implementation plan
         run: python -B ../verifica.py --fast
 

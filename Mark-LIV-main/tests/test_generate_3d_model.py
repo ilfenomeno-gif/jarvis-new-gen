@@ -146,46 +146,6 @@ def test_key_lookup_and_cli(tmp_path, monkeypatch):
     assert registry_cli.run(["set-tripo-key"], RT(), read_token=lambda p: " ").startswith("error")
 
 
-def test_hf_token_lookup_and_cli(tmp_path, monkeypatch):
-    from core import local_3d_gen, registry_cli
-    from core.secret_store import SecretStore
-    class Plain:
-        def protect(self, d): return d
-        def unprotect(self, d): return d
-    store = SecretStore(tmp_path / "s.json", Plain())
-    for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
-        monkeypatch.delenv(var, raising=False)
-    assert local_3d_gen.hf_token(store=store) == ""
-    monkeypatch.setenv("HF_TOKEN", "envtok")
-    assert local_3d_gen.hf_token(store=store) == "envtok"
-    class RT:
-        secrets = store
-    out = registry_cli.run(["set-hf-token"], RT(), read_token=lambda p: " hf_abc ")
-    assert "stored" in out and "hf_abc" not in out
-    assert local_3d_gen.hf_token(store=store) == "hf_abc"
-    assert registry_cli.run(["set-hf-token"], RT(), read_token=lambda p: " ").startswith("error")
-
-
-def test_sketchfab_token_cli_and_lookup(tmp_path, monkeypatch):
-    from core import model_search, registry_cli
-    from core.secret_store import SecretStore
-    class Plain:
-        def protect(self, d): return d
-        def unprotect(self, d): return d
-    store = SecretStore(tmp_path / "s.json", Plain())
-    monkeypatch.delenv("SKETCHFAB_TOKEN", raising=False)
-    assert model_search.sketchfab_token(store=store) == ""
-    class RT:
-        secrets = store
-    out = registry_cli.run(["set-sketchfab-token"], RT(), read_token=lambda p: " sfk_fake ")
-    assert "stored" in out and "sfk_fake" not in out
-    assert store.get("sketchfab_api_key") == "sfk_fake"
-    assert model_search.sketchfab_token(store=store) == "sfk_fake"
-    monkeypatch.setenv("SKETCHFAB_TOKEN", "envtok")
-    assert model_search.sketchfab_token(store=store) == "sfk_fake"
-    assert registry_cli.run(["set-sketchfab-token"], RT(), read_token=lambda p: " ").startswith("error")
-
-
 def test_real_sdk_names_exist_when_installed():
     tripo3d = pytest.importorskip("tripo3d")
     for name in ("text_to_model", "wait_for_task", "download_task_models"):

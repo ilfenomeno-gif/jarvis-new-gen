@@ -173,14 +173,7 @@ def _search_in_app(query: str) -> None:
     _clear_and_paste(query)
     time.sleep(1.0)
 
-def _confirm_message_send(player, platform: str, receiver: str, message: str) -> bool:
-    confirm = getattr(player, "confirm_send_message", None)
-    if not callable(confirm):
-        return False
-    return confirm(platform, receiver, message) is True
-
-
-def _desktop_send(app_name: str, receiver: str, message: str, player=None) -> str:
+def _desktop_send(app_name: str, receiver: str, message: str) -> str:
     import pyautogui
     if not _open_app(app_name):
         return f"Could not open {app_name}."
@@ -214,27 +207,25 @@ def _desktop_send(app_name: str, receiver: str, message: str, player=None) -> st
         return f"Could not safely locate the message input in {app_name}; message not sent."
     _paste_text(message)
     time.sleep(0.2)
-    if not _confirm_message_send(player, app_name, receiver, message):
-        return f"Message prepared for {receiver} via {app_name}, but not sent (confirmation unavailable or cancelled)."
     pyautogui.press("enter")
     time.sleep(0.3)
     return f"Message sent to {receiver} via {app_name}."
 
-def _send_whatsapp(receiver: str, message: str, player=None) -> str:
-    return _desktop_send("WhatsApp", receiver, message, player)
+def _send_whatsapp(receiver: str, message: str) -> str:
+    return _desktop_send("WhatsApp", receiver, message)
 
-def _send_telegram(receiver: str, message: str, player=None) -> str:
-    return _desktop_send("Telegram", receiver, message, player)
+def _send_telegram(receiver: str, message: str) -> str:
+    return _desktop_send("Telegram", receiver, message)
 
-def _send_signal(receiver: str, message: str, player=None) -> str:
-    return _desktop_send("Signal", receiver, message, player)
-
-
-def _send_discord(receiver: str, message: str, player=None) -> str:
-    return _desktop_send("Discord", receiver, message, player)
+def _send_signal(receiver: str, message: str) -> str:
+    return _desktop_send("Signal", receiver, message)
 
 
-def _send_instagram(receiver: str, message: str, player=None) -> str:
+def _send_discord(receiver: str, message: str) -> str:
+    return _desktop_send("Discord", receiver, message)
+
+
+def _send_instagram(receiver: str, message: str) -> str:
     _require_pyautogui()
 
     if not _open_browser_url("https://www.instagram.com/direct/new/"):
@@ -256,38 +247,13 @@ def _send_instagram(receiver: str, message: str, player=None) -> str:
 
     _paste_text(message)
     time.sleep(0.2)
-    if not _confirm_message_send(player, "Instagram", receiver, message):
-        return f"Message prepared for {receiver} via Instagram, but not sent (confirmation unavailable or cancelled)."
     pyautogui.press("enter")
     time.sleep(0.3)
 
     return f"Message sent to {receiver} via Instagram."
 
 
-def _send_tiktok(receiver: str, message: str, player=None) -> str:
-    _require_pyautogui()
-    if not _open_browser_url("https://www.tiktok.com/messages"):
-        return "Could not open TikTok messages in browser."
-    if not _visual_wait_for_app("TikTok", timeout=12.0):
-        return "Could not verify TikTok is open; message not sent."
-    if not _smart_click_element("search"):
-        return "Could not safely locate TikTok message search; message not sent."
-    _paste_text(receiver)
-    time.sleep(1.2)
-    if not _smart_click_element(receiver):
-        return f"Could not safely select TikTok recipient '{receiver}'; message not sent."
-    if not _smart_click_element("message input field"):
-        return "Could not safely locate the TikTok message input; message not sent."
-    _paste_text(message)
-    time.sleep(0.2)
-    if not _confirm_message_send(player, "TikTok", receiver, message):
-        return f"Message prepared for {receiver} via TikTok, but not sent (confirmation unavailable or cancelled)."
-    pyautogui.press("enter")
-    time.sleep(0.3)
-    return f"Message sent to {receiver} via TikTok."
-
-
-def _send_messenger(receiver: str, message: str, player=None) -> str:
+def _send_messenger(receiver: str, message: str) -> str:
     _require_pyautogui()
 
     if not _open_browser_url("https://www.messenger.com/"):
@@ -303,8 +269,6 @@ def _send_messenger(receiver: str, message: str, player=None) -> str:
 
     _paste_text(message)
     time.sleep(0.2)
-    if not _confirm_message_send(player, "Messenger", receiver, message):
-        return f"Message prepared for {receiver} via Messenger, but not sent (confirmation unavailable or cancelled)."
     pyautogui.press("enter")
     time.sleep(0.3)
 
@@ -314,7 +278,6 @@ _PLATFORM_MAP = [
     ({"whatsapp", "wp", "wapp"},              _send_whatsapp),
     ({"telegram", "tg"},                      _send_telegram),
     ({"instagram", "ig", "insta"},            _send_instagram),
-    ({"tiktok", "tik tok"},                    _send_tiktok),
     ({"signal"},                               _send_signal),
     ({"discord"},                              _send_discord),
     ({"messenger", "facebook", "fb"},         _send_messenger),
@@ -326,7 +289,7 @@ def _resolve_platform(platform_str: str):
     for keywords, handler in _PLATFORM_MAP:
         if any(k in key for k in keywords):
             return handler
-    return lambda r, m, p=None: _desktop_send(platform_str.strip().title(), r, m, p)
+    return lambda r, m: _desktop_send(platform_str.strip().title(), r, m)
 
 
 def send_message(
@@ -354,7 +317,7 @@ def send_message(
 
     try:
         handler = _resolve_platform(platform)
-        result  = handler(receiver, message_text, player)
+        result  = handler(receiver, message_text)
     except Exception as e:
         result = f"Could not send message: {e}"
 
@@ -367,22 +330,14 @@ def send_message(
 
 TOOL = {
     "name": "send_message",
-    "description": (
-        "Drafts a message in WhatsApp, Instagram, TikTok, Telegram, Signal, "
-        "Discord, or Messenger, then asks the user to verify the recipient and "
-        "exact text in the app before it sends. It never sends without that "
-        "confirmation."
-    ),
+    "description": "Sends a text message via WhatsApp, Telegram, or other messaging platform.",
     "risk_class": "write",
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "receiver":     {"type": "STRING", "description": "Recipient contact name"},
             "message_text": {"type": "STRING", "description": "The message to send"},
-            "platform":     {
-                "type": "STRING",
-                "description": "Platform: WhatsApp, Instagram, TikTok, Telegram, Signal, Discord, or Messenger.",
-            }
+            "platform":     {"type": "STRING", "description": "Platform: WhatsApp, Telegram, etc."}
         },
         "required": ["receiver", "message_text", "platform"]
     },

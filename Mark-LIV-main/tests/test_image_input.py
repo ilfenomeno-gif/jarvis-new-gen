@@ -113,8 +113,7 @@ def worker_runner(calls):
     return runner
 
 
-def test_generate_local_with_image_skips_the_text_stage(tmp_path, monkeypatch):
-    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+def test_generate_local_with_image_skips_the_text_stage(tmp_path):
     png = image_input.sanitise_image(png_bytes(), tmp_path / "w")
     calls = []
     path = gen.generate_local("image car", tmp_path, worker_runner(calls), image=png)

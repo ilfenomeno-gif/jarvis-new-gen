@@ -26,17 +26,9 @@ scikit-image>=0.22
 #   1. python -m core.local_3d_gen setup     # clona anche third_party/stable-fast-3d
 #   2. pip install jaxtyping open_clip_torch pynanoinstantmeshes gpytoolbox
 #      (NON usare requirements.txt di SF3D: fissa numpy/transformers/torch e romperebbe il venv)
-#   3. Estensioni CUDA (servono MSVC Build Tools 2022 "Sviluppo desktop con C++" e CUDA Toolkit 12.8, nvcc nel PATH).
-#      Da "x64 Native Tools Command Prompt for VS 2022" (CUDA_HOME e PATH vanno impostati PRIMA di vcvars,
-#      altrimenti %PATH% sovrascrive quello di MSVC e cl.exe non viene trovato):
-#        set CUDA_HOME=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8
-#        set USE_CUDA=1 && set USE_NATIVE_ARCH=0 && set DISTUTILS_USE_SDK=1 && set TORCH_CUDA_ARCH_LIST=8.9
-#        set NVCC_APPEND_FLAGS=-allow-unsupported-compiler     (MSVC 14.44 e' piu' recente del supportato da CUDA 12.8)
-#        elimina le cartelle build\ e *.egg-info in texture_baker e uv_unwrapper (altrimenti la compilazione viene saltata)
-#        pip install --no-build-isolation --no-cache-dir third_party\stable-fast-3d\texture_baker third_party\stable-fast-3d\uv_unwrapper
-#      In texture_baker/csrc/baker_kernel.cu sostituire #include <torch/extension.h> con
-#      <torch/library.h>, <torch/types.h>, <vector>, <iostream>, <chrono> (con torch 2.11 + MSVC 14.44
-#      extension.h da "error C2872: std ambiguo"). Senza CUDA il baker gira solo su CPU e SF3D ripiega su TripoSR.
+#   3. Estensioni, da "x64 Native Tools Command Prompt" (MSVC Build Tools 2022, carico "Sviluppo desktop con C++"):
+#        set USE_NATIVE_ARCH=0 && set USE_CUDA=0 && set DISTUTILS_USE_SDK=1
+#        pip install --no-build-isolation third_party\stable-fast-3d\texture_baker third_party\stable-fast-3d\uv_unwrapper
+#      Senza CUDA Toolkit (nvcc) le estensioni sono compilate in C++ su CPU: funziona, non serve il Toolkit.
 #   4. Modello gated: accettare la licenza su https://huggingface.co/stabilityai/stable-fast-3d e fare
-#      "python -m core.registry_cli set-hf-token" (salvato nel SecretStore; Jarvis lo passa al worker),
-#      oppure "huggingface-cli login" / variabile HF_TOKEN.
+#      "huggingface-cli login" (oppure impostare HF_TOKEN).

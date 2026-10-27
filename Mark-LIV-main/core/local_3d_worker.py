@@ -10,10 +10,8 @@ import argparse
 import gc
 import json
 import os
-import socket
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 RESULT_PREFIX = "JARVIS_RESULT "
@@ -79,17 +77,8 @@ def probe() -> dict:
             "missing": _missing_modules(), "backend": backend(), "sf3d_ready": sf3d_ready()}
     if info["cuda"]:
         props = torch.cuda.get_device_properties(0)
-        try:
-            free_bytes, _ = torch.cuda.mem_get_info(0)
-            free_gb = round(free_bytes / 1024 ** 3, 2)
-        except Exception:
-            free_gb = round(props.total_memory / 1024 ** 3, 2)
-        info.update(gpu=props.name, vram_gb=round(props.total_memory / 1024 ** 3, 2), free_vram_gb=free_gb)
+        info.update(gpu=props.name, vram_gb=round(props.total_memory / 1024 ** 3, 2))
     return info
-
-
-_WARMED_TSR_MODEL = None
-
 
 
 def _free(torch) -> None:
@@ -294,14 +283,8 @@ def _cutout_to_triposr_mesh(cut, torch, use_half: bool = True):
     print("CUTOUT " + json.dumps(stats), flush=True)
     lap("debug_images", began)
     started = time.perf_counter()
-    global _WARMED_TSR_MODEL
-    should_delete = False
-    if _WARMED_TSR_MODEL is not None:
-        model = _WARMED_TSR_MODEL
-    else:
-        model = TSR.from_pretrained(TRIPOSR_MODEL, config_name="config.yaml", weight_name="model.ckpt")
-        model.to("cuda")
-        should_delete = True
+    model = TSR.from_pretrained(TRIPOSR_MODEL, config_name="config.yaml", weight_name="model.ckpt")
+    model.to("cuda")
     # autocast keeps the weights in fp32 but runs the heavy matmuls in fp16, so float32 inputs still work
     precision = torch.autocast("cuda", dtype=torch.float16, enabled=use_half)
     started = lap("triposr_load", started)
@@ -328,9 +311,8 @@ def _cutout_to_triposr_mesh(cut, torch, use_half: bool = True):
                 _free(torch)
         raise torch.cuda.OutOfMemoryError("CUDA out of memory during mesh extraction")
     finally:
-        if should_delete:
-            del model
-            _free(torch)
+        del model
+        _free(torch)
 
 def _build_mesh(images, torch, use_half: bool, allow_sf3d: bool = True):
     """Returns (mesh, backend_used, y_up). SF3D first unless disabled; any SF3D failure falls back to TripoSR."""
@@ -399,137 +381,9 @@ def generate(prompt: str, out: Path, image: Path | None = None) -> dict:
             "textured": getattr(getattr(mesh, "visual", None), "kind", None) == "texture"}
 
 
-def _is_parent_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            kernel32 = ctypes.windll.kernel32
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            SYNCHRONIZE = 0x00100000
-            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
-            if not handle:
-                return False
-            exit_code = ctypes.c_ulong()
-            kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
-            kernel32.CloseHandle(handle)
-            return exit_code.value == 259  # STILL_ACTIVE
-        except Exception:
-            return True
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def run_server(parent_pid: int | None = None, port: int = 0) -> int:
-    import torch
-    if not torch.cuda.is_available():
-        emit({"ok": False, "code": "no_cuda", "message": "no CUDA GPU available"})
-        return 1
-
-    # Prewarm TripoSR model in VRAM
-    global _WARMED_TSR_MODEL
-    try:
-        _install_marching_cubes_fallback()
-        sys.path.insert(0, str(triposr_dir()))
-        from tsr.system import TSR
-        _WARMED_TSR_MODEL = TSR.from_pretrained(TRIPOSR_MODEL, config_name="config.yaml", weight_name="model.ckpt")
-        _WARMED_TSR_MODEL.to("cuda")
-        _WARMED_TSR_MODEL.eval()
-    except Exception as exc:
-        emit({"ok": False, "code": "prewarm_failed", "message": str(exc)})
-        return 1
-
-    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_sock.bind(("127.0.0.1", port))
-    bound_port = server_sock.getsockname()[1]
-    server_sock.listen(5)
-    server_sock.settimeout(2.0)
-
-    base_dir = Path(__file__).resolve().parent.parent
-    cache_dir = Path(os.environ.get("JARVIS_3D_CACHE_DIR") or base_dir / "cache" / "3d")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    server_meta_path = cache_dir / "worker_server.json"
-    meta = {
-        "pid": os.getpid(),
-        "port": bound_port,
-        "parent_pid": parent_pid,
-        "ready": True,
-        "backend": "triposr",
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }
-    tmp_path = server_meta_path.with_name(f".server.{os.getpid()}.tmp")
-    tmp_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    os.replace(tmp_path, server_meta_path)
-
-    emit({"ok": True, "warmed": True, "port": bound_port, "pid": os.getpid()})
-
-    try:
-        while True:
-            try:
-                conn, _ = server_sock.accept()
-            except socket.timeout:
-                if parent_pid and not _is_parent_alive(parent_pid):
-                    break
-                continue
-            except OSError:
-                break
-
-            try:
-                conn.settimeout(1800.0)
-                f = conn.makefile("r", encoding="utf-8")
-                line = f.readline()
-                if not line:
-                    conn.close()
-                    continue
-                req = json.loads(line)
-                action = req.get("action")
-                if action == "ping":
-                    resp = {"ok": True, "status": "ready", "backend": "triposr", "pid": os.getpid()}
-                    conn.sendall(json.dumps(resp).encode("utf-8") + b"\n")
-                elif action == "stop":
-                    conn.sendall(json.dumps({"ok": True}).encode("utf-8") + b"\n")
-                    conn.close()
-                    break
-                elif action == "generate":
-                    prompt = req.get("prompt", "")
-                    out_path = Path(req["out"])
-                    img_path = Path(req["image"]) if req.get("image") else None
-                    result = generate(prompt, out_path, img_path)
-                    resp = {"type": "result", "payload": result}
-                    conn.sendall(json.dumps(resp).encode("utf-8") + b"\n")
-                else:
-                    conn.sendall(json.dumps({"error": f"unknown action: {action}"}).encode("utf-8") + b"\n")
-            except Exception as exc:
-                try:
-                    conn.sendall(json.dumps({"type": "result", "payload": {"ok": False, "code": "error", "message": str(exc)}}).encode("utf-8") + b"\n")
-                except Exception:
-                    pass
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-    finally:
-        server_sock.close()
-        server_meta_path.unlink(missing_ok=True)
-        if _WARMED_TSR_MODEL is not None:
-            del _WARMED_TSR_MODEL
-            _free(torch)
-
-    return 0
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", action="store_true")
-    parser.add_argument("--server", action="store_true", help="Run as persistent warm worker")
-    parser.add_argument("--parent-pid", type=int, default=None, help="Parent process ID to monitor")
-    parser.add_argument("--port", type=int, default=0, help="Port to listen on (0 for dynamic)")
     parser.add_argument("--prompt")
     parser.add_argument("--image")
     parser.add_argument("--out")
@@ -537,8 +391,6 @@ def main(argv=None) -> int:
     if args.probe:
         emit(probe())
         return 0
-    if args.server:
-        return run_server(parent_pid=args.parent_pid, port=args.port)
     if not (args.prompt or args.image) or not args.out:
         emit({"ok": False, "code": "error", "message": "--prompt (or --image) and --out are required"})
         return 2

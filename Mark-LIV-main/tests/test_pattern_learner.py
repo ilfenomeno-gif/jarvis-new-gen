@@ -69,6 +69,46 @@ def test_model_context_uses_cad_filename_and_none_is_a_valid_previous_style(patt
     assert pattern["occurrences"] == 1
 
 
+def test_live_dispatcher_tracks_loaded_pc_style_observations(pattern_store):
+    import main as jarvis_main
+
+    jarvis = object.__new__(jarvis_main.JarvisLive)
+    jarvis._last_user_text = "carica il PC CAD"
+    jarvis._observe_pattern_tool_result(
+        "viewer_3d",
+        {"mode": "load_model", "model": "cad/pc.glb"},
+        "Model cad/pc.glb loaded.",
+    )
+    for style in ("realistic", "blueprint", "realistic"):
+        jarvis._observe_pattern_tool_result(
+            "viewer_3d",
+            {"mode": "set_material_style", "style": style},
+            f"Material style set to {style}.",
+        )
+
+    realistic = next(
+        item for item in pattern_learner.list_patterns()
+        if item["observation"].startswith("preferred:realistic;")
+    )
+    assert realistic["context"] == "pc"
+    assert realistic["observation"] == "preferred:realistic;previous:none"
+    assert realistic["occurrences"] == 2
+    assert realistic["confidence"] == 0.6
+
+    jarvis._observe_pattern_tool_result(
+        "viewer_3d",
+        {"mode": "set_material_style", "style": "realistic"},
+        "Material style set to realistic.",
+    )
+    realistic = next(
+        item for item in pattern_learner.list_patterns()
+        if item["observation"].startswith("preferred:realistic;")
+    )
+    assert realistic["occurrences"] == 3
+    assert realistic["confidence"] == 0.9
+    assert "prefer realistic style" in pattern_learner.get_hints_for("cad/pc.glb")
+
+
 def test_live_system_prompt_uses_repeated_style_corrections(pattern_store, tmp_path, monkeypatch):
     import main as jarvis_main
 
@@ -155,68 +195,6 @@ def test_live_dispatcher_learns_only_corrected_style_not_generation_baseline(pat
     assert patterns[0]["confidence"] == 0.9
     hints = pattern_learner.get_hints_for("create another car")
     assert hints == "For auto models, prefer realistic over blueprint."
-
-
-def test_live_dispatcher_tracks_loaded_pc_and_initial_style_change(pattern_store):
-    import main as jarvis_main
-
-    jarvis = object.__new__(jarvis_main.JarvisLive)
-    jarvis._last_user_text = "carica il PC CAD"
-    jarvis._observe_pattern_tool_result(
-        "viewer_3d",
-        {"mode": "load_model", "model": "cad/pc.glb"},
-        "Model cad/pc.glb loaded.",
-    )
-    jarvis._observe_pattern_tool_result(
-        "viewer_3d",
-        {"mode": "set_material_style", "style": "realistic"},
-        "Material style set to realistic.",
-    )
-
-    pattern = pattern_learner.list_patterns()[0]
-    assert pattern["context"] == "pc"
-    assert pattern["observation"] == "preferred:realistic;previous:none"
-    assert pattern["occurrences"] == 1
-
-
-def test_live_style_cycle_preserves_realistic_observation_count(pattern_store):
-    import main as jarvis_main
-
-    jarvis = object.__new__(jarvis_main.JarvisLive)
-    jarvis._last_user_text = "carica il PC CAD"
-    jarvis._observe_pattern_tool_result(
-        "viewer_3d",
-        {"mode": "load_model", "model": "cad/pc.glb"},
-        "Model cad/pc.glb loaded.",
-    )
-    for style in ("realistic", "blueprint", "realistic"):
-        jarvis._observe_pattern_tool_result(
-            "viewer_3d",
-            {"mode": "set_material_style", "style": style},
-            f"Material style set to {style}.",
-        )
-
-    realistic = next(
-        item for item in pattern_learner.list_patterns()
-        if item["observation"].startswith("preferred:realistic;")
-    )
-    assert realistic["context"] == "pc"
-    assert realistic["observation"] == "preferred:realistic;previous:none"
-    assert realistic["occurrences"] == 2
-    assert realistic["confidence"] == 0.6
-
-    jarvis._observe_pattern_tool_result(
-        "viewer_3d",
-        {"mode": "set_material_style", "style": "realistic"},
-        "Material style set to realistic.",
-    )
-    realistic = next(
-        item for item in pattern_learner.list_patterns()
-        if item["observation"].startswith("preferred:realistic;")
-    )
-    assert realistic["occurrences"] == 3
-    assert realistic["confidence"] == 0.9
-    assert "prefer realistic style" in pattern_learner.get_hints_for("cad/pc.glb")
 
 
 def test_pattern_cli_list_delete_and_confirmed_clear(pattern_store):

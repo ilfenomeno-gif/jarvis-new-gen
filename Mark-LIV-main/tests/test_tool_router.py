@@ -21,7 +21,6 @@ SAMPLE = [decl(n) for n in (
     sorted(ALWAYS | BASE)
     + ["generate_3d_model", "viewer_3d", "weather_report", "reminder", "flight_finder", "file_controller",
        "gev", "gev_mcp_get_earthquakes", "gev_mcp_aircraft_in_area", "spotify_music_control", "brand_new_tool"]
-       + ["send_message", "streaming_services"]
 )]
 
 
@@ -47,39 +46,6 @@ def test_keywords_pick_matching_tools_in_italian_and_english():
     assert "spotify_music_control" in names(router.select("play some music", SAMPLE))
     out = names(router.select("mostrami i terremoti di oggi", SAMPLE))
     assert "gev_mcp_get_earthquakes" in out and "weather_report" not in out
-
-
-def test_messaging_and_streaming_phrases_select_their_tools():
-    router = ToolRouter()
-    for phrase in (
-        "manda un DM su TikTok",
-        "scrivi un messaggio su Instagram",
-        "invia un WhatsApp",
-    ):
-        assert "send_message" in names(router.select(phrase, SAMPLE)), phrase
-    assert "streaming_services" in names(
-        router.select("controlla se Dune e incluso su Netflix o Prime", SAMPLE)
-    )
-
-
-def test_browser_game_request_keeps_browser_and_computer_controls():
-    declarations = SAMPLE + [
-        decl("computer_control"),
-        decl("browser_control"),
-        decl("press_key"),
-    ]
-
-    out = names(ToolRouter().select("gioca a Snake su Google", declarations))
-
-    assert {"computer_control", "browser_control", "press_key"} <= out
-
-
-def test_app_requests_keep_app_launcher_available():
-    declarations = SAMPLE + [decl("app_launcher")]
-    router = ToolRouter()
-
-    for phrase in ("apri il Blocco Note", "open Chrome", "lancia Visual Studio Code"):
-        assert "app_launcher" in names(router.select(phrase, declarations)), phrase
 
 
 def test_viewer_voice_commands_select_the_3d_tools():

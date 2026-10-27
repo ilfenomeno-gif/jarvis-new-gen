@@ -21,7 +21,6 @@ from core.viewer3d import MODELS_DIR
 DOWNLOADS_DIR = MODELS_DIR / "downloads"
 MAX_BYTES = 40 * 1024 * 1024
 _SKETCHFAB = "https://api.sketchfab.com/v3/"
-SKETCHFAB_SECRET_NAME = "sketchfab_api_key"
 _KHRONOS = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/edc7c9e67c639d230715049ee31f9a96a6babbbe/Models/"
 
 # keyword (it/en) -> Khronos sample model. These are generic objects, not specific brands.
@@ -48,7 +47,7 @@ def sketchfab_token(config_dir: Path | None = None, store=None) -> str:
             from core.secret_store import SecretStore
             base = Path(config_dir) if config_dir else Path(__file__).resolve().parent.parent / "config"
             store = SecretStore(base / "secrets.json")
-        value = store.get(SKETCHFAB_SECRET_NAME)
+        value = store.get("sketchfab_api_key")
     except Exception:
         value = None
     return value or os.environ.get("SKETCHFAB_TOKEN", "")
@@ -68,11 +67,11 @@ def _api_json(url: str, token: str = "", timeout: float = 20.0) -> dict:
         return json.loads(response.read(2_000_000).decode("utf-8"))
 
 
-def search_sketchfab(query: str, api=_api_json, limit: int = 5, token: str = "") -> list[dict]:
+def search_sketchfab(query: str, api=_api_json, limit: int = 5) -> list[dict]:
     url = _SKETCHFAB + "search?" + urllib.parse.urlencode(
         {"type": "models", "q": query, "downloadable": "true", "count": limit})
     out = []
-    for item in (api(url, token) if token else api(url)).get("results", [])[:limit]:
+    for item in api(url).get("results", [])[:limit]:
         user = item.get("user") or {}
         lic = item.get("license") or {}
         out.append({"source": "sketchfab", "uid": str(item.get("uid", "")), "name": item.get("name", query),
@@ -121,10 +120,7 @@ def search_and_download(query: str, dest: Path | None = None, api=_api_json, fet
     problems = []
     if token:
         try:
-            hits = search_sketchfab(query, api, token=token)
-            if not hits:
-                problems.append("Sketchfab: no downloadable model matches the query")
-            for hit in hits:
+            for hit in search_sketchfab(query, api):
                 url = _sketchfab_glb_url(hit["uid"], token, api)
                 if not url:
                     continue
@@ -134,16 +130,14 @@ def search_and_download(query: str, dest: Path | None = None, api=_api_json, fet
         except Exception as exc:
             problems.append(f"Sketchfab: {type(exc).__name__}: {exc}")
     else:
-        problems.append("Sketchfab download skipped (no API token: run 'python -m core.registry_cli set-sketchfab-token' or set SKETCHFAB_TOKEN)")
+        problems.append("Sketchfab download skipped (no API token: set sketchfab_api_key or SKETCHFAB_TOKEN)")
     hit = curated_match(query)
     if hit:
         try:
             path = _save(fetch(hit["url"]), hit, dest)
             return {"ok": True, "path": path, "source": "khronos", "name": hit["name"], "author": hit["author"],
                     "license": hit["license"],
-                    "note": f"This is a {hit['generic']} (generic sample model), not the exact object requested. "
-                            "If the user asked for a specific real object, say so and continue with web_search "
-                            "mode='images' + generate_3d_model image_url without asking."}
+                    "note": f"This is a {hit['generic']} (generic sample model), not the exact object requested."}
         except Exception as exc:
             problems.append(f"Khronos: {type(exc).__name__}: {exc}")
     return {"ok": False, "reason": "; ".join(problems) or "no model found"}

@@ -3029,7 +3029,6 @@ class MainWindow(QMainWindow):
     _gev_send_sig     = pyqtSignal(str)
     _gemini_chat_sig  = pyqtSignal()
     _streaming_play_confirm_sig = pyqtSignal(str, object)
-    _message_send_confirm_sig = pyqtSignal(str, str, str, object)
     _browser_open_sig = pyqtSignal(str)
     _browser_close_sig = pyqtSignal()
     _browser_key_sig = pyqtSignal(str)
@@ -3295,9 +3294,6 @@ class MainWindow(QMainWindow):
         self._gemini_chat_sig.connect(self._show_gemini_chat)
         self._streaming_play_confirm_sig.connect(
             self._confirm_streaming_play_on_ui_thread
-        )
-        self._message_send_confirm_sig.connect(
-            self._confirm_message_send_on_ui_thread
         )
         self._browser_open_sig.connect(self._open_url_in_webview)
         self._browser_close_sig.connect(self.close_browser)
@@ -3938,26 +3934,6 @@ class MainWindow(QMainWindow):
         dialog.exec()
         return dialog.clickedButton() is open_button
 
-    def _ask_send_message(self, platform: str, receiver: str, message: str) -> bool:
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("Conferma invio messaggio")
-        dialog.setText(
-            f"Controlla il destinatario e il testo in {platform} prima di inviare."
-        )
-        dialog.setInformativeText(
-            f"Destinatario: {receiver}\n\nMessaggio:\n{message}"
-        )
-        send_button = dialog.addButton(
-            "Invia messaggio", QMessageBox.ButtonRole.AcceptRole
-        )
-        cancel_button = dialog.addButton(
-            "Annulla", QMessageBox.ButtonRole.RejectRole
-        )
-        dialog.setDefaultButton(cancel_button)
-        dialog.setEscapeButton(cancel_button)
-        dialog.exec()
-        return dialog.clickedButton() is send_button
-
     def _ask_sf3d_fallback(self) -> bool:
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Generazione SF3D lenta")
@@ -4030,23 +4006,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             response["error"] = str(exc)
             self._log_sig.emit(f"Streaming: dialog di conferma non riuscito: {exc}")
-        finally:
-            event = response.get("event")
-            if isinstance(event, threading.Event):
-                event.set()
-
-    def _confirm_message_send_on_ui_thread(
-        self, platform: str, receiver: str, message: str, response: object
-    ) -> None:
-        if not isinstance(response, dict):
-            return
-        try:
-            response["confirmed"] = self._ask_send_message(
-                platform, receiver, message
-            )
-        except Exception as exc:
-            response["error"] = str(exc)
-            self._log_sig.emit(f"Messaggi: dialog di conferma non riuscito: {exc}")
         finally:
             event = response.get("event")
             if isinstance(event, threading.Event):
@@ -6621,28 +6580,6 @@ class JarvisUI:
         if "error" in response:
             self.write_log(
                 f"Streaming: conferma non disponibile; Chrome non è stato aperto: "
-                f"{response['error']}"
-            )
-            return False
-        return response.get("confirmed") is True
-
-    def confirm_send_message(
-        self, platform: str, receiver: str, message: str, timeout: float = 120
-    ) -> bool:
-        """Ask on the Qt UI thread before sending a prepared external message."""
-        if QThread.currentThread() == self._win.thread():
-            return self._win._ask_send_message(platform, receiver, message)
-
-        response: dict = {"event": threading.Event()}
-        self._win._message_send_confirm_sig.emit(
-            platform, receiver, message, response
-        )
-        if not response["event"].wait(timeout):
-            self.write_log("Messaggi: conferma scaduta; messaggio non inviato.")
-            return False
-        if "error" in response:
-            self.write_log(
-                f"Messaggi: conferma non disponibile; messaggio non inviato: "
                 f"{response['error']}"
             )
             return False

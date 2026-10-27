@@ -14,15 +14,13 @@ licenze, consulta il README e [LICENSES.md](../LICENSES.md) della root.
 - Pannello interno di chat testuale Gemini, accessibile dalla UI e tramite comando vocale, con finestra separata di fallback.
 - Routing degli intenti prima dell'esecuzione degli strumenti, con domande di chiarimento quando una richiesta e ambigua.
 - Controllo di applicazioni, finestre, volume, luminosita, Wi-Fi, scorciatoie e alimentazione.
-- Controllo desktop per singole azioni tramite PyAutoGUI (`computer_control`); il loop autonomo Gemini Computer Use non e implementato.
 - Lettura dello schermo tramite OCR locale opzionale e fallback a visione multimodale.
 - Apertura e controllo del browser con percorso DOM-first e fallback visivo.
 - Apertura di Netflix e Prime Video e ricerca dei titoli nel browser integrato di JARVIS.
 - Ricerca, lettura, riepilogo, spostamento, copia e scrittura di file locali.
 - Avvio e aggiornamento di giochi tramite Steam ed Epic, con rilevamento degli eseguibili installati.
 - Invio assistito di messaggi, controllo di YouTube, ricerche web, meteo e ricerca voli.
-- Memoria locale con contesto delle ultime due sessioni e apprendimento dei percorsi solo dopo letture ripetute.
-- Supervisore multi-agente che coordina ricerche in parallelo e lascia scrittura/test a chiamate con conferma esplicita.
+- Memoria lunga locale con indicizzazione dei file, profili prompt e continuita della sessione.
 - Undo per molte operazioni reversibili e conferma umana per spegnimento, riavvio e Wi-Fi.
 - Plugin estendibili tramite un singolo file Python nella cartella `plugins/`.
 - Dashboard web locale per il controllo remoto tramite token temporanei e connessione cifrata.
@@ -73,11 +71,7 @@ caricamento TripoSR, come fase fredda prevalente.
 
 ## Pattern Learner
 
-Jarvis può apprendere preferenze ripetute sullo stile 3D, fallimenti di ricerca
-e correzioni esplicite. I suggerimenti vengono inseriti nel prompt solo dopo
-almeno tre osservazioni concordi; sono limitati a tre e a 200 caratteri.
-L'apprendimento e l'iniezione si disattivano con `JARVIS_PATTERN_LEARNER=0`.
-I dati restano in `memory/learned_patterns.json` e sono gestibili da CLI:
+Jarvis apprende preferenze ripetute sullo stile 3D, fallimenti di ricerca e correzioni esplicite. Gli hint entrano nel prompt dopo tre osservazioni concordi, con un limite di tre e 200 caratteri. `JARVIS_PATTERN_LEARNER=0` disattiva apprendimento e iniezione. I dati restano in `memory/learned_patterns.json` e si gestiscono con:
 
 ```powershell
 python -m core.registry_cli patterns-list
@@ -133,24 +127,15 @@ configurato in `core/gemini.py` con il modello testuale `gemini-flash-latest`;
 non usa il payload audio di Gemini Live. La chiave API resta quella in
 `config/api_keys.json`.
 
-I comandi `streaming_services` aprono Netflix e Prime Video nel browser di
-sistema, usando il profilo e la sessione gia autenticati del browser predefinito
-(o di quello richiesto). La ricerca e `play` aprono la pagina del titolo; la
-riproduzione resta sotto il controllo dell'utente e JARVIS non raccoglie
-credenziali. L'azione `availability` apre i risultati JustWatch Italia per
-distinguere l'inclusione nell'abbonamento dalle offerte a noleggio/acquisto;
-la disponibilita dipende dal paese e dal catalogo corrente e non viene
-presentata come garantita da JARVIS.
-
-`open_app` cerca applicazioni e collegamenti nel menu Start, nei percorsi
-`App Paths` di Windows e nel `PATH`, e riconosce gli eseguibili dei giochi
-installati dalle librerie locali Steam/Epic quando disponibili; non richiede
-che l'utente fornisca il percorso completo. Se viene fornito un percorso `.exe`,
-scorciatoia o file audio/video, JARVIS lo inoltra al launcher Windows come
-percorso esplicito; i percorsi di documenti restano separati e non vengono
-avviati come applicazioni. I messaggi WhatsApp, Instagram,
-TikTok e le altre piattaforme supportate vengono preparati nell'app: JARVIS
-mostra destinatario e testo e invia solo dopo la conferma esplicita dell'utente.
+I comandi `streaming_services` aprono Netflix o Prime Video e i risultati di
+ricerca nel browser integrato di JARVIS. Qt WebEngine non include Widevine DRM:
+la riproduzione protetta non funziona nel pannello interno. Per un comando
+`play`, JARVIS mostra l'avviso «La riproduzione protetta (DRM) non e supportata
+nel pannello interno. Apro in Chrome?» e apre la stessa pagina in Chrome solo
+dopo la conferma esplicita. Se il browser integrato non e disponibile, il plugin
+usa `browser_control` come fallback. Il login resta gestito dal servizio nel
+browser; JARVIS non memorizza credenziali, non rimuove protezioni password e
+non avvia automaticamente acquisti o noleggi.
 
 Avviare JARVIS con:
 
@@ -163,12 +148,9 @@ In alternativa, `python setup.py` installa le dipendenze, prepara Playwright e v
 ## Sicurezza e privacy
 
 - Le chiavi API, i certificati, la memoria lunga e i log locali sono esclusi dal repository.
-- Le segnalazioni di bug e limitazioni vengono aggiunte senza sovrascrivere lo storico a `C:\Users\PC\Desktop\problemi Jarvis\resoconto_limitazioni.txt`; e possibile impostare `JARVIS_PROBLEM_REPORT_PATH` per usare un altro percorso.
 - Le azioni irreversibili richiedono una conferma esplicita nell'interfaccia.
 - I percorsi vengono validati dai guardrail prima delle operazioni sui file.
 - La memoria viene conservata localmente in `memory/long_term.json` e non viene pubblicata.
-- I percorsi dei file vengono memorizzati localmente solo dopo almeno due letture riuscite; non entrano nel prompt o nel richiamo conversazionale.
-- I riepiloghi delle sessioni usati come contesto vengono generati tramite il provider Gemini configurato e inseriti nel prompt delle sessioni successive.
 - Il dashboard deve essere usato su una rete fidata; token e certificati non vanno condivisi.
 - Le azioni automatiche possono interagire con applicazioni reali: verificare sempre destinatari, percorsi e finestre prima di operazioni sensibili.
 

@@ -122,4 +122,4 @@ def test_startup_briefing_uses_italian_despite_saved_language():
     assert "Speak only in Italian" in greeting_prompt
     assert "Speak only in Italian" in language_instruction
     assert "Traditional Chinese" not in greeting_prompt + language_instruction
-    assert "Marco" not in greeting_prompt and "Signore" in greeting_prompt
+    assert "Marco" in greeting_prompt
