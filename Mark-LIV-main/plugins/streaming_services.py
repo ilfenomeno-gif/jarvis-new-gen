@@ -1,4 +1,4 @@
-"""Open Netflix and Prime Video in JARVIS's integrated browser when available."""
+"""Open streaming services in the user's authenticated browser profile."""
 
 from __future__ import annotations
 
@@ -16,14 +16,17 @@ _SERVICES = {
         "search": "https://www.primevideo.com/search/ref=atv_nb_sr",
     },
 }
+_JUSTWATCH_SEARCH = "https://www.justwatch.com/it/cerca"
 
 PLUGIN = {
     "name": "streaming_services",
     "description": (
-        "Opens Netflix or Prime Video in JARVIS's integrated browser, with an "
-        "external-browser fallback. Can open a home page or search for a title. "
-        "For play, explains the Qt WebEngine DRM limitation and asks before "
-        "opening the result in Chrome. It never collects passwords or buys/rents."
+        "Opens Netflix or Prime Video in the user's normal browser, preserving "
+        "its existing signed-in account/session; never asks for or stores "
+        "credentials. Can search for or open a title. The availability action "
+        "opens JustWatch Italy results so the user can distinguish titles "
+        "included with a subscription from rent/buy offers. It never purchases "
+        "or rents content."
     ),
     "parameters": {
         "type": "OBJECT",
@@ -36,18 +39,18 @@ PLUGIN = {
             "action": {
                 "type": "STRING",
                 "description": (
-                    "open home, search for a title, or play (asks before opening "
-                    "the search in Chrome because internal DRM playback is unsupported)."
+                    "open the service, search/play a title, or availability "
+                    "(open JustWatch Italy to check subscription versus paid offers)."
                 ),
-                "enum": ["open", "search", "play"],
+                "enum": ["open", "search", "play", "availability"],
             },
             "query": {
                 "type": "STRING",
-                "description": "Film or series title for search/play.",
+                "description": "Film or series title for search, play, or availability.",
             },
             "browser": {
                 "type": "STRING",
-                "description": "Optional browser: chrome, edge, firefox, opera, brave, or vivaldi.",
+                "description": "Optional browser; otherwise use the default browser and its existing account session.",
                 "enum": ["chrome", "edge", "firefox", "opera", "operagx", "brave", "vivaldi"],
             },
         },
@@ -61,12 +64,14 @@ def _target_url(service: str, action: str, query: str = "") -> str:
     action_key = action.strip().casefold()
     if service_key not in _SERVICES:
         raise ValueError("Service must be netflix or prime_video.")
-    if action_key not in {"open", "search", "play"}:
-        raise ValueError("Action must be open, search, or play.")
+    if action_key not in {"open", "search", "play", "availability"}:
+        raise ValueError("Action must be open, search, play, or availability.")
     if action_key == "open":
         return _SERVICES[service_key]["home"]
     if not query.strip():
-        raise ValueError("A title is required for search and play.")
+        raise ValueError("A title is required for search, play, and availability.")
+    if action_key == "availability":
+        return f"{_JUSTWATCH_SEARCH}?{urlencode({'q': query.strip()})}"
     params = {"q": query.strip()} if service_key == "netflix" else {
         "phrase": query.strip()
     }
@@ -76,87 +81,23 @@ def _target_url(service: str, action: str, query: str = "") -> str:
 def run(parameters: dict, player=None) -> str:
     service = str(parameters.get("service", ""))
     action = str(parameters.get("action", ""))
-    action_key = action.casefold()
-    url = _target_url(service, action, str(parameters.get("query", "")))
+    query = str(parameters.get("query", ""))
+    url = _target_url(service, action, query)
     browser = parameters.get("browser")
-    open_in_webview = getattr(player, "open_url_in_webview", None)
-    embedded = callable(open_in_webview)
-
-    if embedded:
-        try:
-            open_in_webview(url)
-            result = f"Opened internally in JARVIS: {url}"
-        except Exception as exc:
-            embedded = False
-            _log(
-                player,
-                f"Streaming: browser interno non disponibile ({exc}); "
-                "uso il browser esterno.",
-            )
-
-    if not embedded and action_key != "play":
-        result = browser_control(
-            parameters={
-                "action": "go_to",
-                "url": url,
-                **({"browser": browser} if browser else {}),
-            },
-            player=player,
-        )
-        if not result.startswith("Opened"):
-            return result
-
-    if action_key != "play":
-        return result
-
-    confirm = getattr(player, "confirm_streaming_play_in_chrome", None)
-    if not callable(confirm):
-        _log(
-            player,
-            "Streaming: conferma DRM non disponibile; non avvio Chrome "
-            "automaticamente.",
-        )
-        if embedded:
-            return (
-                f"{result} La riproduzione protetta (DRM) non è supportata "
-                "nel pannello interno; non è stato aperto Chrome perché la "
-                "conferma non è disponibile."
-            )
-        return (
-            "Il browser interno non è disponibile e non è possibile chiedere "
-            "conferma DRM; non è stato aperto alcun browser."
-        )
-
-    if not embedded:
-        result = "Browser interno non disponibile; apertura esterna in attesa di conferma."
-
-    try:
-        confirmed = confirm(url)
-    except Exception as exc:
-        _log(player, f"Streaming: conferma per Chrome non riuscita: {exc}")
-        return (
-            f"{result} La riproduzione DRM non è supportata nel pannello "
-            "interno; Chrome non è stato aperto perché la conferma è fallita."
-        )
-    if not confirmed:
-        return (
-            f"{result} Riproduzione protetta (DRM) non supportata nel pannello "
-            "interno. Apertura esterna annullata."
-        )
-
-    chrome_result = browser_control(
-        parameters={"action": "go_to", "url": url, "browser": "chrome"},
+    result = browser_control(
+        parameters={
+            "action": "go_to",
+            "url": url,
+            **({"browser": browser} if browser else {}),
+        },
         player=player,
     )
-    if not chrome_result.startswith("Opened"):
-        return f"{result} Conferma ricevuta, ma Chrome non è stato aperto: {chrome_result}"
-    return (
-        f"{chrome_result} La riproduzione protetta (DRM) non è supportata nel "
-        "pannello interno; selezioni il titolo e avvii la riproduzione in Chrome."
-    )
-
-
-def _log(player, message: str) -> None:
-    write_log = getattr(player, "write_log", None)
-    if callable(write_log):
-        write_log(message)
+    if not result.startswith("Opened"):
+        return result
+    if action.casefold() == "availability":
+        return (
+            f"{result} Controlla su JustWatch le offerte indicate come incluse "
+            "nell'abbonamento Netflix o Prime Video; le opzioni noleggio/acquisto "
+            "sono a pagamento extra. La disponibilità dipende dal paese e dal catalogo aggiornato."
+        )
+    return result

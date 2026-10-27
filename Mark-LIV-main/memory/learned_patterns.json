@@ -1,3 +1,40 @@
 {
-  "patterns": []
+  "patterns": [
+    {
+      "id": "1fa3e75e8f48c2aa",
+      "type": "style_preference",
+      "context": "general",
+      "observation": "preferred:realistic;previous:unknown",
+      "confidence": 0.6,
+      "occurrences": 2,
+      "last_seen": "2026-10-26T21:47:16+00:00"
+    },
+    {
+      "id": "8ccd6ba445812f17",
+      "type": "style_preference",
+      "context": "general",
+      "observation": "preferred:blueprint;previous:realistic",
+      "confidence": 0.3,
+      "occurrences": 1,
+      "last_seen": "2026-10-26T21:47:05+00:00"
+    },
+    {
+      "id": "5b48b48e7225fc37",
+      "type": "style_preference",
+      "context": "pc",
+      "observation": "preferred:realistic;previous:none",
+      "confidence": 0.9,
+      "occurrences": 3,
+      "last_seen": "2026-10-26T22:00:52+00:00"
+    },
+    {
+      "id": "8c725db8844a2586",
+      "type": "style_preference",
+      "context": "pc",
+      "observation": "preferred:blueprint;previous:realistic",
+      "confidence": 0.3,
+      "occurrences": 1,
+      "last_seen": "2026-10-26T22:00:08+00:00"
+    }
+  ]
 }

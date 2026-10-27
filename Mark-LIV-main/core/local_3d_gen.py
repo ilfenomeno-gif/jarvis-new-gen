@@ -17,6 +17,7 @@ import math
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -293,6 +294,175 @@ def readiness_problem(info: dict) -> str | None:
     return None
 
 
+def is_prewarm_enabled() -> bool:
+    return os.environ.get("JARVIS_3D_PREWARM", "1").strip() != "0"
+
+
+def free_vram_gb(runner=None) -> float:
+    info = probe(runner)
+    return float(info.get("free_vram_gb", info.get("vram_gb", 0.0)))
+
+
+def _worker_server_file() -> Path:
+    return CACHE_DIR / "worker_server.json"
+
+
+def _is_process_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            SYNCHRONIZE = 0x00100000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+            if not handle:
+                return False
+            exit_code = ctypes.c_ulong()
+            kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+            kernel32.CloseHandle(handle)
+            return exit_code.value == 259  # STILL_ACTIVE
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def get_warm_worker_info() -> dict | None:
+    path = _worker_server_file()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pid = int(data.get("pid", 0))
+        port = int(data.get("port", 0))
+        if not pid or not port or not _is_process_alive(pid):
+            path.unlink(missing_ok=True)
+            return None
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        s.connect(("127.0.0.1", port))
+        s.sendall(json.dumps({"action": "ping"}).encode("utf-8") + b"\n")
+        resp = json.loads(s.makefile("r", encoding="utf-8").readline())
+        s.close()
+        if resp.get("ok"):
+            return data
+    except Exception:
+        path.unlink(missing_ok=True)
+        return None
+    return None
+
+
+def warm_up(wait: bool = True, timeout: float = 60.0) -> bool:
+    if not is_prewarm_enabled():
+        return False
+    if not is_installed():
+        return False
+    info = get_warm_worker_info()
+    if info is not None:
+        return True
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    server_file = _worker_server_file()
+    server_file.unlink(missing_ok=True)
+
+    cmd = [
+        python_exe(),
+        "-m",
+        "core.local_3d_worker",
+        "--server",
+        "--parent-pid",
+        str(os.getpid()),
+    ]
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if sys.platform == "win32":
+        flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(BASE),
+        env=_worker_env(),
+        creationflags=flags,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if not wait:
+        return True
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return False
+        info = get_warm_worker_info()
+        if info is not None and info.get("ready"):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def stop_warm_worker() -> bool:
+    info = get_warm_worker_info()
+    path = _worker_server_file()
+    path.unlink(missing_ok=True)
+    if not info:
+        return False
+    pid = info.get("pid")
+    port = info.get("port")
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2.0)
+        s.connect(("127.0.0.1", int(port)))
+        s.sendall(json.dumps({"action": "stop"}).encode("utf-8") + b"\n")
+        s.close()
+    except Exception:
+        pass
+    if pid and _is_process_alive(int(pid)):
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+            else:
+                os.kill(int(pid), 9)
+        except Exception:
+            pass
+    return True
+
+
+def _send_to_warm_worker(prompt: str, out_file: Path, image: Path | None, timeout: float = DEFAULT_TIMEOUT,
+                         progress_callback=None) -> dict:
+    info = get_warm_worker_info()
+    if not info:
+        raise RuntimeError("No warm 3D worker available")
+    port = int(info["port"])
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect(("127.0.0.1", port))
+    try:
+        req = {
+            "action": "generate",
+            "prompt": prompt,
+            "out": str(out_file),
+            "image": str(image) if image else None,
+        }
+        s.sendall(json.dumps(req).encode("utf-8") + b"\n")
+        f = s.makefile("r", encoding="utf-8")
+        line = f.readline()
+        if not line:
+            raise RuntimeError("Warm 3D worker closed connection unexpectedly")
+        msg = json.loads(line)
+        if msg.get("type") == "result":
+            return msg.get("payload", {})
+        return msg
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+
 def _cache_enabled() -> bool:
     return os.environ.get("JARVIS_3D_CACHE", "1").strip() != "0"
 
@@ -531,7 +701,11 @@ def _cache_store(
 def cache_entries() -> list[dict]:
     """Return cache metadata for the local CLI; prompts never enter application logs."""
     entries = []
+    if not CACHE_DIR.is_dir():
+        return []
     for metadata_path in sorted(CACHE_DIR.glob("*.json")):
+        if not re.fullmatch(r"[a-f0-9]{64}", metadata_path.stem):
+            continue
         metadata = _read_cache_metadata(metadata_path)
         if metadata is None:
             raise ValueError(f"invalid 3D cache metadata: {metadata_path.name}")
@@ -542,7 +716,11 @@ def cache_entries() -> list[dict]:
 def cache_size_bytes() -> int:
     if not CACHE_DIR.is_dir():
         return 0
-    return sum(path.stat().st_size for path in CACHE_DIR.iterdir() if path.is_file())
+    return sum(
+        path.stat().st_size
+        for path in CACHE_DIR.iterdir()
+        if path.is_file() and re.fullmatch(r"[a-f0-9]{64}\.(?:glb|json)", path.name)
+    )
 
 
 def clear_cache(confirmed: bool = False) -> int:
@@ -622,9 +800,24 @@ def _generate_local(prompt, models_dir: Path | None = None, runner=None,
         )
         try:
             if runner is None:
-                code, stdout, stderr = _run_monitored(
-                    cmd, timeout, backend_name, progress_callback, fallback_callback
-                )
+                warm_info = get_warm_worker_info() if is_prewarm_enabled() and backend_name == "triposr" else None
+                if warm_info is not None:
+                    try:
+                        result_payload = _send_to_warm_worker(
+                            prompt if not image else "", out_file, image, timeout, progress_callback
+                        )
+                        code = 0 if result_payload.get("ok") else 1
+                        stdout = RESULT_PREFIX + json.dumps(result_payload)
+                        stderr = ""
+                    except Exception as warm_exc:
+                        _log_event("warm_worker_fallback", error=str(warm_exc))
+                        code, stdout, stderr = _run_monitored(
+                            cmd, timeout, backend_name, progress_callback, fallback_callback
+                        )
+                else:
+                    code, stdout, stderr = _run_monitored(
+                        cmd, timeout, backend_name, progress_callback, fallback_callback
+                    )
             else:
                 code, stdout, stderr = runner(cmd, timeout)
         except subprocess.TimeoutExpired as exc:

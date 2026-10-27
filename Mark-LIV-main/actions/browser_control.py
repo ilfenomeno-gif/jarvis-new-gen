@@ -1120,3 +1120,66 @@ def read_active_page(
         msg = f"Could not read the active browser page: {e}"
         _log(player, msg)
         return msg
+
+
+TOOL = {
+    "name": "browser_control",
+    "description": (
+        "Controls the user's external web browser. For a website that should open "
+        "inside Jarvis, use open_website instead. Use this for searching, clicking "
+        "elements, filling forms, scrolling, screenshots, navigation, or an explicit "
+        "request to use an external browser. Simple open/search requests launch the "
+        "user's browser normally (their real profile "
+        "and logged-in accounts); interactive actions (click, type, fill_form...) attach an "
+        "automation browser. "
+        "Always pass the 'browser' parameter when the user specifies a browser (e.g. 'open in Edge', "
+        "'use Firefox', 'open Chrome'). Multiple browsers can run simultaneously."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "action": {
+                "type": "STRING",
+                "description": (
+                    "go_to | search | click | type | scroll | fill_form | smart_click | "
+                    "smart_type | get_text | get_url | press | new_tab | close_tab | "
+                    "screenshot | back | forward | reload | switch | list_browsers | close | close_all"
+                ),
+            },
+            "browser": {
+                "type": "STRING",
+                "description": (
+                    "Target browser: chrome | edge | firefox | opera | operagx | brave | "
+                    "vivaldi | safari. Omit to use the currently active browser."
+                ),
+            },
+            "url": {"type": "STRING", "description": "URL for go_to / new_tab action"},
+            "query": {"type": "STRING", "description": "Search query for search action"},
+            "engine": {
+                "type": "STRING",
+                "description": "Search engine: google | bing | duckduckgo | yandex (default: google)",
+            },
+            "selector": {"type": "STRING", "description": "CSS selector for click/type"},
+            "text": {"type": "STRING", "description": "Text to click or type"},
+            "description": {
+                "type": "STRING",
+                "description": "Element description for smart_click/smart_type",
+            },
+            "direction": {"type": "STRING", "description": "up | down for scroll"},
+            "amount": {"type": "INTEGER", "description": "Scroll amount in pixels (default: 500)"},
+            "key": {
+                "type": "STRING",
+                "description": "Key name for press action (e.g. Enter, Escape, F5)",
+            },
+            "path": {"type": "STRING", "description": "Save path for screenshot"},
+            "incognito": {"type": "BOOLEAN", "description": "Open in private/incognito mode"},
+            "clear_first": {
+                "type": "BOOLEAN",
+                "description": "Clear field before typing (default: true)",
+            },
+        },
+        "required": ["action"],
+    },
+    "risk_class": "write",
+    "handler": browser_control,
+}

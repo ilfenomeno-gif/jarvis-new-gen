@@ -5,11 +5,13 @@ backward-compatible fallback. ``migrate`` moves the key into the SecretStore.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from core.secret_store import SecretStore
 
 SECRET_NAME = "gemini_api_key"
+ALLOW_PLAINTEXT_ENV = "JARVIS_ALLOW_PLAINTEXT_KEY"
 _BASE = Path(__file__).resolve().parents[1]
 
 
@@ -39,7 +41,9 @@ def gemini_api_key(config_dir: Path | None = None) -> str:
             value = None
         if value:
             return value
-    return _read_plain(config_dir)
+    if os.environ.get(ALLOW_PLAINTEXT_ENV) == "1":
+        return _read_plain(config_dir)
+    return ""
 
 
 def save_gemini_key(config_dir: Path, key: str, os_name: str,
@@ -64,6 +68,8 @@ def save_gemini_key(config_dir: Path, key: str, os_name: str,
         secured = store.get(SECRET_NAME) == key
     except Exception:
         secured = False
+    if not secured and os.environ.get(ALLOW_PLAINTEXT_ENV) != "1":
+        return False
     data["gemini_api_key"] = "" if secured else key
     path.write_text(json.dumps(data, indent=4), encoding="utf-8")
     return secured

@@ -18,7 +18,7 @@ from core.jarvis_runtime import build_runtime
 from core.mcp_server import McpServer, to_json_schema
 from core.mcp_transport import HttpMcpInvoker, McpTransportError, stdio_invoker
 from core.secret_store import SecretStore
-from core.voice_transport import NullTransport
+from core.voice_transport import GeminiLiveTransport, NullTransport
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -159,10 +159,64 @@ def test_registry_cli_lifecycle(tmp_path):
 
 
 def test_null_voice_transport():
-    transport = NullTransport()
-    heard = []
-    transport.on_transcript(heard.append)
-    transport.feed("ciao")
-    transport.speak("salve")
+    import asyncio
 
-    assert heard == ["ciao"] and transport.spoken == ["salve"]
+    transport = NullTransport()
+    event = object()
+    transport.feed_event(event)
+
+    async def exercise():
+        await transport.send_audio({"data": b"audio", "mime_type": "audio/pcm"})
+        await transport.send_content(turns={"parts": [{"text": "ciao"}]})
+        await transport.send_tool_response(["ok"])
+        return [item async for item in transport.receive()]
+
+    assert asyncio.run(exercise()) == [event]
+    assert transport.connected
+    assert transport.audio == [{"data": b"audio", "mime_type": "audio/pcm"}]
+    assert transport.contents == [({"parts": [{"text": "ciao"}]}, True)]
+    assert transport.tool_responses == [["ok"]]
+    transport.close()
+    assert not transport.connected
+
+
+def test_gemini_live_transport_delegates_session_operations_and_closes():
+    import asyncio
+
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        async def send_realtime_input(self, *, media):
+            self.calls.append(("audio", media))
+
+        async def send_client_content(self, *, turns, turn_complete):
+            self.calls.append(("content", turns, turn_complete))
+
+        async def send_tool_response(self, *, function_responses):
+            self.calls.append(("tools", function_responses))
+
+        async def receive(self):
+            yield "transcript/audio event"
+
+    session = Session()
+    transport = GeminiLiveTransport(session)
+
+    async def exercise():
+        await transport.send_audio({"data": b"audio", "mime_type": "audio/pcm"})
+        await transport.send_content(turns="hello", turn_complete=False)
+        await transport.send_tool_response(["done"])
+        return [item async for item in transport.receive()]
+
+    assert asyncio.run(exercise()) == ["transcript/audio event"]
+    assert session.calls == [
+        ("audio", {"data": b"audio", "mime_type": "audio/pcm"}),
+        ("content", "hello", False),
+        ("tools", ["done"]),
+    ]
+    assert transport.connected
+    transport.close()
+    assert not transport.connected
+
+    with pytest.raises(RuntimeError, match="closed"):
+        asyncio.run(transport.send_audio({"data": b"x"}))

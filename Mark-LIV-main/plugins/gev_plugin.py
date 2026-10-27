@@ -23,7 +23,10 @@ from plugins._gev_mcp_client import (
 )
 
 GEV_DIR = Path(__file__).resolve().parents[1] / "gods-eye-view-main" / "_gev-clone"
-GEV_PORT = 4173
+GEV_BASE_PORT = 4173
+GEV_MAX_PORT_TRIES = 20
+GEV_PORT = GEV_BASE_PORT
+GEV_PORT_ENV = "JARVIS_GEV_PORT"
 GEV_NODE_DIR = GEV_DIR / ".node"
 GEV_HEALTH_URL = f"http://127.0.0.1:{GEV_PORT}/"
 STARTUP_TIMEOUT_SEC = 60
@@ -245,17 +248,17 @@ def _captured_text(output: str | bytes | None) -> str:
     return output
 
 
-def _port_is_listening() -> bool:
+def _port_is_listening(port: int | None = None) -> bool:
     try:
-        with socket.create_connection(("127.0.0.1", GEV_PORT), timeout=0.25):
+        with socket.create_connection(("127.0.0.1", port or GEV_PORT), timeout=0.25):
             return True
     except OSError:
         return False
 
 
-def _gev_server_is_healthy() -> bool:
+def _gev_server_is_healthy(port: int | None = None) -> bool:
     try:
-        with urlopen(GEV_HEALTH_URL, timeout=2) as response:
+        with urlopen(f"http://127.0.0.1:{port or GEV_PORT}/", timeout=2) as response:
             if response.status != 200:
                 return False
             html = response.read().decode("utf-8", errors="replace")
@@ -418,6 +421,93 @@ def _close_job_handle() -> None:
     _job_kernel = None
 
 
+# Port selection: a stale Vite left by a crashed Jarvis is killed; anything else is left alone.
+def _listening_pids(port: int) -> set[int]:
+    import psutil
+
+    pids: set[int] = set()
+    try:
+        for conn in psutil.net_connections(kind="tcp"):
+            if (
+                conn.status == psutil.CONN_LISTEN
+                and conn.laddr
+                and conn.laddr.port == port
+                and conn.pid
+            ):
+                pids.add(conn.pid)
+    except (psutil.Error, OSError):
+        pass
+    return pids
+
+
+def _is_ghost_gev_process(proc) -> bool:
+    """True only for a node process running THIS checkout whose Jarvis parent is gone."""
+    import psutil
+
+    try:
+        if not proc.name().lower().startswith("node"):
+            return False
+        checkout = str(GEV_DIR).lower()
+        details = " ".join(proc.cmdline()).lower() + " " + (proc.cwd() or "").lower()
+        if checkout not in details:
+            return False
+        parent = proc.parent()
+        if parent is not None and parent.is_running() and parent.status() != psutil.STATUS_ZOMBIE:
+            return False
+        return True
+    except (psutil.Error, OSError):
+        return False
+
+
+def _free_ghost_on_port(port: int) -> bool:
+    """Terminate a ghost GEV server holding the port; True if the port is free afterwards."""
+    import psutil
+
+    for pid in _listening_pids(port):
+        try:
+            proc = psutil.Process(pid)
+        except psutil.Error:
+            continue
+        if not _is_ghost_gev_process(proc):
+            continue
+        _log(f"GEV: termino il server fantasma (pid {pid}) sulla porta {port}")
+        try:
+            proc.terminate()
+            proc.wait(STOP_TIMEOUT_SEC)
+        except psutil.TimeoutExpired:
+            try:
+                proc.kill()
+                proc.wait(STOP_TIMEOUT_SEC)
+            except psutil.Error:
+                pass
+        except psutil.Error:
+            pass
+    deadline = time.monotonic() + 2
+    while _port_is_listening(port) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    return not _port_is_listening(port)
+
+
+def _select_port() -> int:
+    """First free port from GEV_BASE_PORT, freeing a ghost server where possible."""
+    for port in range(GEV_BASE_PORT, GEV_BASE_PORT + GEV_MAX_PORT_TRIES):
+        if not _port_is_listening(port) or _free_ghost_on_port(port):
+            return port
+        _log(f"GEV: porta {port} occupata da un altro processo, provo la successiva")
+    raise RuntimeError(
+        f"GEV: nessuna porta libera tra {GEV_BASE_PORT} e "
+        f"{GEV_BASE_PORT + GEV_MAX_PORT_TRIES - 1}."
+    )
+
+
+def _use_port(port: int) -> None:
+    global GEV_PORT, GEV_HEALTH_URL
+    GEV_PORT = port
+    GEV_HEALTH_URL = f"http://127.0.0.1:{port}/"
+    # The UI reads this when it loads the page, so its URL follows the chosen port.
+    os.environ[GEV_PORT_ENV] = str(port)
+
+
 # GEV lifecycle hook
 def start() -> None:
     _startup_finished.clear()
@@ -468,15 +558,7 @@ def _start_runtime() -> None:
         if not GEV_DIR.is_dir():
             raise FileNotFoundError(f"GEV: checkout non trovata: {GEV_DIR}")
 
-        server_is_external = _port_is_listening()
-        if server_is_external and not _gev_server_is_healthy():
-            message = (
-                f"GEV: la porta {GEV_PORT} è occupata da un servizio che non "
-                "ha superato l'health check di God's Eye View; il processo "
-                "esistente non verrà terminato."
-            )
-            _log(message)
-            raise RuntimeError(message)
+        _use_port(_select_port())
 
         env, node_exe, npm_cli = _gev_runtime()
         creation_options = _creation_options()
@@ -488,80 +570,65 @@ def _start_runtime() -> None:
         if not vite_cli.is_file():
             raise FileNotFoundError(f"GEV: vite.js non trovato dopo install: {vite_cli}")
 
-        if not server_is_external and _port_is_listening():
-            server_is_external = _gev_server_is_healthy()
-            if not server_is_external:
-                message = (
-                    f"GEV: la porta {GEV_PORT} è stata occupata durante "
-                    "l'avvio da un servizio che non ha superato l'health "
-                    "check di God's Eye View; il processo esistente non "
-                    "verrà terminato."
-                )
-                _log(message)
-                raise RuntimeError(message)
+        if _port_is_listening():
+            _use_port(_select_port())
 
-        if server_is_external:
-            _log(
-                f"GEV: riuso il server God's Eye View esistente su "
-                f"{GEV_HEALTH_URL}; il processo non è gestito da JARVIS."
+        with _output_lock:
+            _output_lines.clear()
+
+        command = [
+            node_exe,
+            str(vite_cli),
+            "--host", "127.0.0.1",
+            "--port", str(GEV_PORT),
+            "--strictPort",
+        ]
+        try:
+            _process = subprocess.Popen(
+                command,
+                cwd=GEV_DIR,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                **creation_options,
             )
-        else:
-            with _output_lock:
-                _output_lines.clear()
+            _attach_kill_on_close_job(_process)
+            _output_reader = threading.Thread(
+                target=_read_output,
+                args=(_process,),
+                name="gev-output",
+                daemon=True,
+            )
+            _output_reader.start()
 
-            command = [
-                node_exe,
-                str(vite_cli),
-                "--host", "127.0.0.1",
-                "--port", str(GEV_PORT),
-                "--strictPort",
-            ]
-            try:
-                _process = subprocess.Popen(
-                    command,
-                    cwd=GEV_DIR,
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    **creation_options,
-                )
-                _attach_kill_on_close_job(_process)
-                _output_reader = threading.Thread(
-                    target=_read_output,
-                    args=(_process,),
-                    name="gev-output",
-                    daemon=True,
-                )
-                _output_reader.start()
-
-                deadline = time.monotonic() + STARTUP_TIMEOUT_SEC
-                while True:
-                    if _process.poll() is not None:
-                        if _output_reader is not None:
-                            _output_reader.join()
-                        output = _process_output() or "(output vuoto)"
-                        raise RuntimeError(
-                            f"GEV: il server è terminato con exit code "
-                            f"{_process.returncode}.\nstdout/stderr:\n{output}"
-                        )
-                    if _gev_server_is_healthy():
-                        break
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(
-                            f"GEV: health check non riuscito entro "
-                            f"{STARTUP_TIMEOUT_SEC}s.\nstdout/stderr:\n"
-                            f"{_process_output() or '(output vuoto)'}"
-                        )
-                    time.sleep(1)
-            except Exception:
-                if _process is not None:
-                    _terminate_process(_process)
-                _close_job_handle()
-                _process = None
-                _started = False
-                raise
+            deadline = time.monotonic() + STARTUP_TIMEOUT_SEC
+            while True:
+                if _process.poll() is not None:
+                    if _output_reader is not None:
+                        _output_reader.join()
+                    output = _process_output() or "(output vuoto)"
+                    raise RuntimeError(
+                        f"GEV: il server è terminato con exit code "
+                        f"{_process.returncode}.\nstdout/stderr:\n{output}"
+                    )
+                if _gev_server_is_healthy():
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"GEV: health check non riuscito entro "
+                        f"{STARTUP_TIMEOUT_SEC}s.\nstdout/stderr:\n"
+                        f"{_process_output() or '(output vuoto)'}"
+                    )
+                time.sleep(1)
+        except Exception:
+            if _process is not None:
+                _terminate_process(_process)
+            _close_job_handle()
+            _process = None
+            _started = False
+            raise
 
         _started = True
         _mcp_start_error = None

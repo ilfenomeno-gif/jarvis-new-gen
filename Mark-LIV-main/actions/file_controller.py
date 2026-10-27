@@ -12,7 +12,7 @@ except ImportError:
     _SEND2TRASH = False
 
 from core.undo import push_undo
-from memory.memory_manager import load_memory, update_memory
+from memory.memory_manager import load_memory, record_file_path
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
@@ -28,13 +28,9 @@ def _file_memory_key(name: str) -> str:
 
 
 def _remember_file_path(path: Path) -> None:
-    """Persist an exact path after a successful file discovery/read."""
+    """Learn a path only after repeated explicit reads, not passive discovery."""
     try:
-        update_memory({
-            "notes": {
-                _file_memory_key(path.name): {"value": str(path.resolve())}
-            }
-        })
+        record_file_path(_file_memory_key(path.name), str(path.resolve()))
     except Exception as exc:
         print(f"[file] Could not remember path for {path.name}: {exc}")
 
@@ -42,13 +38,23 @@ def _remember_file_path(path: Path) -> None:
 def _remembered_file_path(name: str) -> Path | None:
     key = _file_memory_key(name)
     try:
-        entry = load_memory().get("notes", {}).get(key, {})
+        memory = load_memory()
+        paths = memory.get("file_paths", {})
+        entry = paths.get(key, {}) if isinstance(paths, dict) else {}
         value = entry.get("value", "") if isinstance(entry, dict) else str(entry)
+        if not value:
+            notes = memory.get("notes", {})
+            legacy_entry = notes.get(key, {}) if isinstance(notes, dict) else {}
+            value = (
+                legacy_entry.get("value", "")
+                if isinstance(legacy_entry, dict)
+                else str(legacy_entry)
+            )
         candidate = Path(value).expanduser()
         if value and candidate.is_file():
             return candidate.resolve()
-    except Exception:
-        pass
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        print(f"[file] Could not resolve remembered path for {name}: {exc}")
     return None
 
 
@@ -437,8 +443,8 @@ def read_file(path: str, name: str = "", max_chars: int = 4000) -> str:
         if not target.is_file():
             return f"Not a file: {target.name}"
 
-        _remember_file_path(target)
         content = target.read_text(encoding="utf-8", errors="ignore")
+        _remember_file_path(target)
         if len(content) > max_chars:
             content = content[:max_chars] + f"\n\n[Truncated — {len(content)} total chars]"
         return content
@@ -509,7 +515,6 @@ def find_files(name: str = "", extension: str = "",
                 continue
             if name and name.lower() not in item.name.lower():
                 continue
-            _remember_file_path(item)
             size = _format_size(item.stat().st_size)
             results.append(f"📄 {item.name} ({size}) — {item.parent}")
             if len(results) >= max_results:

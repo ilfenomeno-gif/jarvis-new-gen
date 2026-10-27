@@ -1,5 +1,5 @@
-"""Local 3D generation: orchestration with a fake subprocess runner (no GPU, no models)."""
 import json
+from pathlib import Path
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
@@ -578,3 +578,144 @@ def test_local_worker_monitor_requests_confirmed_triposr_fallback(monkeypatch):
     assert code == 0 and stdout == "triposr result"
     assert launched == ["sf3d", "triposr"]
     assert progress == [1, 2]
+
+
+def test_warm_worker_cli_lifecycle(tmp_path, monkeypatch):
+    from core import registry_cli
+
+    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+    warmed = []
+
+    monkeypatch.setattr(gen, "warm_up", lambda wait=True: warmed.append(True) or True)
+    monkeypatch.setattr(gen, "get_warm_worker_info", lambda: {"pid": 9999, "backend": "triposr"})
+    monkeypatch.setattr(gen, "stop_warm_worker", lambda: True)
+
+    out = registry_cli.run(["warm-3d"], None)
+    assert out == "Motore 3D pronto (TripoSR)."
+    assert warmed == [True]
+
+    status = registry_cli.run(["warm-3d", "--status"], None)
+    assert "Motore 3D pronto (TripoSR)" in status and "9999" in status
+
+    stopped = registry_cli.run(["warm-3d", "--stop"], None)
+    assert "3D persistent worker stopped" in stopped
+
+
+def test_prewarm_toggle_and_vram_threshold(tmp_path, monkeypatch):
+    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setenv("JARVIS_3D_PREWARM", "0")
+    assert not gen.is_prewarm_enabled()
+    assert not gen.warm_up()
+
+    monkeypatch.setenv("JARVIS_3D_PREWARM", "1")
+    assert gen.is_prewarm_enabled()
+    monkeypatch.setattr(gen, "probe", lambda runner=None: {"cuda": True, "vram_gb": 8.0, "free_vram_gb": 5.5})
+    assert gen.free_vram_gb() == 5.5
+
+    monkeypatch.setattr(gen, "probe", lambda runner=None: {"cuda": True, "vram_gb": 8.0, "free_vram_gb": 7.2})
+    assert gen.free_vram_gb() == 7.2
+
+
+def test_warm_up_worker_monitors_parent_process(tmp_path, monkeypatch):
+    launched = {}
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, **kwargs):
+        launched["cmd"] = cmd
+        launched["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(gen, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setenv("JARVIS_3D_PREWARM", "1")
+    monkeypatch.setattr(gen, "is_installed", lambda: True)
+    monkeypatch.setattr(gen, "get_warm_worker_info", lambda: None)
+    monkeypatch.setattr(gen.subprocess, "Popen", fake_popen)
+
+    assert gen.warm_up(wait=False)
+    cmd = launched["cmd"]
+    assert cmd[cmd.index("--parent-pid") + 1] == str(gen.os.getpid())
+    assert launched["kwargs"]["stdout"] == gen.subprocess.DEVNULL
+    assert launched["kwargs"]["stderr"] == gen.subprocess.DEVNULL
+
+
+def test_main_start_3d_prewarm(monkeypatch):
+    import main
+
+    logs = []
+    statuses = []
+
+    class FakeUI:
+        def write_log(self, text):
+            logs.append(text)
+        def set_generation_status(self, status):
+            statuses.append(status)
+
+    ui = FakeUI()
+
+    # Case 1: Skipped when free VRAM <= 6 GB
+    monkeypatch.setenv("JARVIS_3D_PREWARM", "1")
+    monkeypatch.setattr(gen, "is_installed", lambda: True)
+    monkeypatch.setattr(gen, "free_vram_gb", lambda: 4.5)
+    t = main.start_3d_prewarm(ui)
+    if t is not None:
+        t.join(timeout=2.0)
+    assert not logs
+
+    # Case 2: Runs when free VRAM > 6 GB
+    monkeypatch.setattr(gen, "free_vram_gb", lambda: 7.0)
+    warmed = []
+    monkeypatch.setattr(gen, "warm_up", lambda wait=True: warmed.append(True) or True)
+    t = main.start_3d_prewarm(ui)
+    assert t is not None
+    t.join(timeout=2.0)
+    assert "HUD: Caricamento motore 3D in corso..." in logs
+    assert "Motore 3D pronto (TripoSR)." in logs
+    assert "Caricamento motore 3D in corso..." in statuses
+    assert "" in statuses  # cleared
+    assert warmed == [True]
+
+
+def test_generate_local_uses_warm_worker(tmp_path, monkeypatch):
+    import socket
+    import threading
+
+    models_dir = tmp_path / "models"
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(gen, "CACHE_DIR", cache_dir)
+    monkeypatch.setattr(gen, "probe", lambda runner=None: READY)
+
+    # Fake server
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.listen(1)
+
+    served = []
+
+    def server_thread():
+        conn, _ = sock.accept()
+        f = conn.makefile("r", encoding="utf-8")
+        line = f.readline()
+        req = json.loads(line)
+        served.append(req)
+        # Create output glb
+        out_p = Path(req["out"])
+        make_glb(out_p)
+        res = {"type": "result", "payload": {"ok": True, "backend": "triposr", "path": str(out_p)}}
+        conn.sendall(json.dumps(res).encode("utf-8") + b"\n")
+        conn.close()
+
+    t = threading.Thread(target=server_thread, daemon=True)
+    t.start()
+
+    # Pretend warm worker is alive
+    monkeypatch.setattr(gen, "get_warm_worker_info", lambda: {"pid": 1234, "port": port, "backend": "triposr"})
+
+    path = gen.generate_local("a warm chair", models_dir)
+    assert path.read_bytes()[:4] == b"glTF"
+    assert len(served) == 1
+    assert served[0]["prompt"] == "a warm chair"
+    sock.close()

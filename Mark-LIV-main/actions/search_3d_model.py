@@ -14,8 +14,11 @@ def search_3d_model(parameters: dict, player=None, **_ignored) -> str:
         return "Invalid request: query is too long (max 120 characters)."
     result = model_search.search_and_download(query)
     if not result["ok"]:
-        return (f"No ready-made 3D model found for '{query}' ({result['reason']}). "
-                "Fall back to generate_3d_model (text or image to 3D).")
+        return (f"No exact ready-made 3D model found for '{query}' ({result['reason']}). "
+                "Do NOT ask the user: switch to the generative fallback now. Call web_search with "
+                "mode='images' for a clear photo of the object, then generate_3d_model with "
+                "image_url=<first direct link> (local Stable Fast 3D). Tell the user, e.g. "
+                "\"Non ho trovato un modello esatto, quindi lo genero da un'immagine\".")
     path = result["path"]
     credit = f"'{result['name']}' by {result['author']} ({result['license']}), saved as downloads/{path.name}."
     if player is not None and hasattr(player, "viewer3d_call") and (parameters or {}).get("show", True) is not False:
@@ -31,10 +34,11 @@ TOOL = {
     "name": "search_3d_model",
     "description": (
         "Searches the web for a ready-made .glb 3D model (Sketchfab with a token, else a curated library), "
-        "downloads it and shows it in realistic style. Use it FIRST for complex or mechanical objects "
-        "(car, engine, weapon, building, famous character): real models have perfect curves and textures. "
-        "If it finds nothing, use generate_3d_model. For simple or organic objects (apple, chair, dragon) "
-        "use generate_3d_model directly. Always mention the author and license from the result."
+        "downloads it and shows it in realistic style. Use it FIRST for any specific object (car model, engine, "
+        "weapon, building, famous character): real models have perfect curves and textures. "
+        "If it finds nothing (or only a generic sample, or no token), do not ask the user: use web_search "
+        "mode='images' to find a photo, then generate_3d_model with image_url. For simple or organic objects "
+        "(apple, chair, dragon) use generate_3d_model directly. Always mention the author and license from the result."
     ),
     "risk_class": "write",
     "parameters": {

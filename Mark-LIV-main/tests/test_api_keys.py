@@ -24,7 +24,15 @@ def _plain(tmp_path: Path, key: str = "plain-key") -> None:
         json.dumps({"gemini_api_key": key, "os_system": "windows"}), encoding="utf-8")
 
 
-def test_falls_back_to_plain_file(tmp_path, monkeypatch):
+def test_plain_file_is_refused_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv(api_keys.ALLOW_PLAINTEXT_ENV, raising=False)
+    monkeypatch.setattr(api_keys, "_store", lambda d: None)
+    _plain(tmp_path)
+    assert api_keys.gemini_api_key(tmp_path) == ""
+
+
+def test_falls_back_to_plain_file_when_explicitly_allowed(tmp_path, monkeypatch):
+    monkeypatch.setenv(api_keys.ALLOW_PLAINTEXT_ENV, "1")
     monkeypatch.setattr(api_keys, "_store", lambda d: None)
     _plain(tmp_path)
     assert api_keys.gemini_api_key(tmp_path) == "plain-key"
@@ -76,7 +84,24 @@ def test_save_gemini_key_goes_to_store_not_plain(tmp_path):
     assert "new-key" not in (tmp_path / "secrets.json").read_text()
 
 
-def test_save_gemini_key_falls_back_when_store_unavailable(tmp_path):
+def test_save_gemini_key_refuses_plaintext_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv(api_keys.ALLOW_PLAINTEXT_ENV, raising=False)
+
+    class Broken:
+        def protect(self, data):
+            raise RuntimeError("no backend")
+
+        def unprotect(self, data):
+            raise RuntimeError("no backend")
+
+    store = SecretStore(tmp_path / "secrets.json", Broken())
+    assert api_keys.save_gemini_key(tmp_path, "k", "linux", store) is False
+    assert not (tmp_path / "api_keys.json").exists()
+
+
+def test_save_gemini_key_falls_back_when_explicitly_allowed(tmp_path, monkeypatch):
+    monkeypatch.setenv(api_keys.ALLOW_PLAINTEXT_ENV, "1")
+
     class Broken:
         def protect(self, data):
             raise RuntimeError("no backend")

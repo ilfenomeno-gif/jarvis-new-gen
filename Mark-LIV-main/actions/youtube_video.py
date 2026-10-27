@@ -2,18 +2,11 @@
 import json
 import re
 import sys
-import time
 import subprocess
 import shutil
 from pathlib import Path
 from datetime import datetime
-from urllib.parse import quote_plus
-
-try:
-    import pyautogui
-    _PYAUTOGUI = True
-except ImportError:
-    _PYAUTOGUI = False
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 try:
     import numpy as np
@@ -116,6 +109,14 @@ def _extract_video_id(url: str) -> str | None:
 
 def _is_valid_youtube_url(url: str) -> bool:
     return bool(re.search(r"(youtube\.com|youtu\.be)", url or ""))
+
+
+def _with_autoplay(url: str) -> str:
+    """Request autoplay from YouTube without sending a global keyboard event."""
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["autoplay"] = "1"
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 def _ask_for_url(prompt_text: str = "YouTube video URL:") -> str | None:
@@ -289,15 +290,13 @@ def _handle_play(parameters: dict, player) -> str:
 
     if _is_valid_youtube_url(query):
         print(f"[YouTube] ▶️ Direct URL detected: {query}")
-        if _open_url(query):
-            if _PYAUTOGUI:
-                import threading
-                def force_play():
-                    time.sleep(5)
-                    pyautogui.press('space')
-                threading.Thread(target=force_play, daemon=True).start()
-            return f"Opening YouTube URL directly: {query}"
-        return f"Could not open the YouTube URL: {query}"
+        autoplay_url = _with_autoplay(query)
+        if _open_url(autoplay_url):
+            return (
+                f"Opened YouTube URL with autoplay requested: {autoplay_url}. "
+                "Playback depends on browser autoplay settings and may require pressing Play."
+            )
+        return f"Could not open the YouTube URL: {autoplay_url}"
 
     print(f"[YouTube] 🔍 Scraping first non-Shorts video for: {query}")
 
@@ -305,8 +304,12 @@ def _handle_play(parameters: dict, player) -> str:
 
     if video_url:
         print(f"[YouTube] ▶️ Opening: {video_url}")
-        if _open_url(video_url):
-            return f"Playing first relevant result for: {query}\n{video_url}"
+        autoplay_url = _with_autoplay(video_url)
+        if _open_url(autoplay_url):
+            return (
+                f"Opened the first relevant result for: {query}\n{autoplay_url}\n"
+                "Playback depends on browser autoplay settings and may require pressing Play."
+            )
         fallback_url = (
             f"https://www.youtube.com/results"
             f"?search_query={quote_plus(query)}"
@@ -457,3 +460,36 @@ def youtube_video(
     except Exception as e:
         print(f"[YouTube] ❌ Error in {action}: {e}")
         return f"YouTube {action} failed, sir: {e}"
+
+
+TOOL = {
+    "name": "youtube_video",
+    "description": (
+        "Controls YouTube. Use for: playing videos, summarizing a video's content, "
+        "getting video info, or showing trending videos. For a specific request, "
+        "always search and play the first relevant result; never open only youtube.com. "
+        "If playback fails, return the targeted search URL."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "action": {
+                "type": "STRING",
+                "description": "play | summarize | get_info | trending (default: play)",
+            },
+            "query": {"type": "STRING", "description": "Search query for play action"},
+            "save": {
+                "type": "BOOLEAN",
+                "description": "Save summary to Notepad (summarize only)",
+            },
+            "region": {
+                "type": "STRING",
+                "description": "Country code for trending e.g. TR, US",
+            },
+            "url": {"type": "STRING", "description": "Video URL for get_info action"},
+        },
+        "required": [],
+    },
+    "risk_class": "write",
+    "handler": youtube_video,
+}

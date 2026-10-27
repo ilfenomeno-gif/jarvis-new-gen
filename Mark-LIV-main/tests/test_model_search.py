@@ -81,8 +81,34 @@ def test_tool_ferrari_loads_realistic_from_downloads(tmp_path, monkeypatch):
 
 def test_tool_not_found_points_to_generation(monkeypatch):
     monkeypatch.setattr(model_search, "search_and_download", lambda q: {"ok": False, "reason": "none"})
-    assert "generate_3d_model" in tool.search_3d_model({"query": "drago"})
+    msg = tool.search_3d_model({"query": "drago"})
+    assert "generate_3d_model" in msg and "web_search" in msg and "images" in msg and "Do NOT ask" in msg
     assert "Invalid request" in tool.search_3d_model({"query": ""})
+
+
+def test_search_sends_token_and_requires_downloadable(tmp_path):
+    calls = []
+
+    def api(url, token=""):
+        calls.append((url, token))
+        return {"results": []}
+    out = model_search.search_and_download("ferrari 12 cilindri", tmp_path, api=api, fetch=lambda u: b"", token="tok")
+    assert calls[0][1] == "tok" and "downloadable=true" in calls[0][0]
+    assert not out["ok"] and "no downloadable model" in out["reason"]
+
+
+def test_missing_token_reason_names_the_cli(tmp_path):
+    out = model_search.search_and_download("drago", tmp_path, api=fake_api, fetch=lambda u: b"", token="")
+    assert not out["ok"] and "set-sketchfab-token" in out["reason"]
+
+
+def test_skill_and_prompt_teach_the_autonomous_flow():
+    from pathlib import Path
+    base = Path(__file__).resolve().parents[1]
+    for text in ((base / "skills" / "ologramma" / "SKILL.md").read_text(encoding="utf-8"),
+                 (base / "core" / "prompt.txt").read_text(encoding="utf-8")):
+        assert "search_3d_model" in text and "mode='images'" in text.replace("mode=images", "mode='images'")
+        assert "image_url" in text and "generate_3d_model" in text
 
 
 def test_downloads_models_are_loadable_and_listed(tmp_path):

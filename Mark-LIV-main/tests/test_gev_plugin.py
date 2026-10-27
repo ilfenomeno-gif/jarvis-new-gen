@@ -245,67 +245,129 @@ def test_dependency_install_fails_clearly_without_lockfile(tmp_path, monkeypatch
         gev_plugin._install_gev_dependencies({}, "portable-node", "npm-cli")
 
 
-def test_start_runtime_reuses_healthy_existing_server_without_owning_it(
+def _busy_ports(monkeypatch, busy):
+    monkeypatch.setattr(gev_plugin, "_port_is_listening", lambda port=None: (port or gev_plugin.GEV_PORT) in busy)
+    monkeypatch.setattr(gev_plugin, "_free_ghost_on_port", lambda port: False)
+    monkeypatch.setattr(gev_plugin, "GEV_PORT", gev_plugin.GEV_BASE_PORT)
+    monkeypatch.setattr(gev_plugin, "GEV_HEALTH_URL", f"http://127.0.0.1:{gev_plugin.GEV_BASE_PORT}/")
+    monkeypatch.delenv(gev_plugin.GEV_PORT_ENV, raising=False)
+
+
+def test_select_port_falls_back_to_next_free_port(monkeypatch):
+    base = gev_plugin.GEV_BASE_PORT
+    _busy_ports(monkeypatch, {base, base + 1})
+    assert gev_plugin._select_port() == base + 2
+
+
+def test_select_port_uses_base_port_when_free(monkeypatch):
+    _busy_ports(monkeypatch, set())
+    assert gev_plugin._select_port() == gev_plugin.GEV_BASE_PORT
+
+
+def test_select_port_gives_up_when_every_port_is_busy(monkeypatch):
+    base = gev_plugin.GEV_BASE_PORT
+    _busy_ports(monkeypatch, set(range(base, base + gev_plugin.GEV_MAX_PORT_TRIES)))
+    with pytest.raises(RuntimeError, match="nessuna porta libera"):
+        gev_plugin._select_port()
+
+
+def test_select_port_reuses_base_port_once_ghost_is_killed(monkeypatch):
+    base = gev_plugin.GEV_BASE_PORT
+    _busy_ports(monkeypatch, {base})
+    monkeypatch.setattr(gev_plugin, "_free_ghost_on_port", lambda port: True)
+    assert gev_plugin._select_port() == base
+
+
+def test_start_runtime_starts_vite_on_fallback_port_and_publishes_it(
     isolated_gev_runtime, monkeypatch
 ):
-    terminated = isolated_gev_runtime
+    base = gev_plugin.GEV_BASE_PORT
+    _busy_ports(monkeypatch, {base})
+    commands = []
+
+    class _Vite:
+        returncode = None
+        stdout = io.StringIO("")
+
+        def poll(self):
+            return None
+
     monkeypatch.setattr(
-        gev_plugin.socket, "create_connection", lambda *_args, **_kwargs: _SocketConnection()
+        gev_plugin.subprocess, "Popen", lambda cmd, **_kw: commands.append(cmd) or _Vite()
     )
-    monkeypatch.setattr(
-        gev_plugin, "urlopen", lambda *_args, **_kwargs: _HttpResponse()
-    )
-    monkeypatch.setattr(
-        gev_plugin.subprocess,
-        "Popen",
-        lambda *_args, **_kwargs: pytest.fail("must not start a second Vite server"),
-    )
-    monkeypatch.setattr(
-        gev_plugin.subprocess,
-        "run",
-        lambda *_args, **_kwargs: pytest.fail("dependencies are already present"),
-    )
+    monkeypatch.setattr(gev_plugin, "_gev_server_is_healthy", lambda port=None: True)
 
     gev_plugin._start_runtime()
-    client = gev_plugin._mcp_client
 
-    assert gev_plugin._started is True
-    assert gev_plugin._process is None
-    assert client is not None and client.started
+    assert commands[0][commands[0].index("--port") + 1] == str(base + 1)
+    assert gev_plugin.GEV_HEALTH_URL == f"http://127.0.0.1:{base + 1}/"
+    assert gev_plugin.os.environ[gev_plugin.GEV_PORT_ENV] == str(base + 1)
+    import ui
+    assert ui._gev_url() == f"http://127.0.0.1:{base + 1}/?ui=panels"
     gev_plugin.stop()
-    assert client.stopped
-    assert terminated == []
+    monkeypatch.delenv(gev_plugin.GEV_PORT_ENV, raising=False)
 
 
-def test_start_runtime_rejects_occupied_port_when_health_check_is_not_gev(
-    isolated_gev_runtime, monkeypatch
-):
-    terminated = isolated_gev_runtime
-    monkeypatch.setattr(
-        gev_plugin.socket, "create_connection", lambda *_args, **_kwargs: _SocketConnection()
-    )
-    monkeypatch.setattr(
-        gev_plugin,
-        "urlopen",
-        lambda *_args, **_kwargs: _HttpResponse(html="<title>Other Service</title>"),
-    )
-    monkeypatch.setattr(
-        gev_plugin,
-        "_gev_runtime",
-        lambda: pytest.fail("must reject the occupied non-GEV service first"),
-    )
-    monkeypatch.setattr(
-        gev_plugin.subprocess,
-        "Popen",
-        lambda *_args, **_kwargs: pytest.fail("must not start over another service"),
-    )
+def test_ghost_detection_only_matches_orphaned_node_of_this_checkout(monkeypatch):
+    import psutil
 
-    with pytest.raises(RuntimeError, match="non.*GEV|health check"):
-        gev_plugin._start_runtime()
+    class _Proc:
+        def __init__(self, name, cmd, parent):
+            self._name, self._cmd, self._parent = name, cmd, parent
 
-    assert gev_plugin._process is None
-    assert gev_plugin._started is False
-    assert terminated == []
+        def name(self):
+            return self._name
+
+        def cmdline(self):
+            return self._cmd
+
+        def cwd(self):
+            return ""
+
+        def parent(self):
+            return self._parent
+
+    class _Alive:
+        def is_running(self):
+            return True
+
+        def status(self):
+            return psutil.STATUS_RUNNING
+
+    vite = [str(gev_plugin.GEV_DIR / "node_modules" / "vite" / "bin" / "vite.js")]
+    assert gev_plugin._is_ghost_gev_process(_Proc("node.exe", vite, None))
+    assert not gev_plugin._is_ghost_gev_process(_Proc("node.exe", vite, _Alive()))
+    assert not gev_plugin._is_ghost_gev_process(_Proc("node.exe", ["other.js"], None))
+    assert not gev_plugin._is_ghost_gev_process(_Proc("python.exe", vite, None))
+
+
+def test_real_ghost_server_on_port_is_terminated(tmp_path, monkeypatch):
+    import os
+    import socket as _socket
+    import subprocess as _sp
+    import sys as _sys
+
+    # A listener whose command line mentions this checkout, with no live parent, is a ghost.
+    script = tmp_path / "ghost.py"
+    script.write_text(
+        "import socket,sys,time\ns=socket.socket();s.bind(('127.0.0.1',0));s.listen()\n"
+        "print(s.getsockname()[1],flush=True);time.sleep(60)\n"
+    )
+    monkeypatch.setattr(gev_plugin, "_log", lambda _m: None)
+    proc = _sp.Popen([_sys.executable, str(script), str(gev_plugin.GEV_DIR)], stdout=_sp.PIPE, text=True)
+    try:
+        port = int(proc.stdout.readline())
+        listener_pids = gev_plugin._listening_pids(port)
+        assert listener_pids
+        assert os.getpid() not in listener_pids
+        # The test process is its parent and alive, so it must NOT be killed.
+        monkeypatch.setattr(gev_plugin, "_is_ghost_gev_process", lambda p: False)
+        assert gev_plugin._free_ghost_on_port(port) is False
+        monkeypatch.setattr(gev_plugin, "_is_ghost_gev_process", lambda p: p.pid in listener_pids)
+        assert gev_plugin._free_ghost_on_port(port) is True
+        assert proc.wait(5) is not None
+    finally:
+        proc.kill()
 
 
 def test_start_runtime_reports_exit_code_and_vite_output(

@@ -1122,6 +1122,58 @@ def game_updater(parameters: dict, player=None, speak=None) -> str:
     return f"Unknown action: '{action}'."
 
 
+TOOL = {
+    "name": "game_updater",
+    "description": (
+        "Use for Steam or Epic operations that manage games: opening, installing, "
+        "downloading, updating, listing installed games, checking download status, "
+        "or scheduling updates. Opening a named game should launch it through Steam "
+        "when it is in the Steam catalog. "
+        "This tool has priority over file search for every videogame request. "
+        "NEVER use browser_control or web_search for Steam/Epic."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "action": {
+                "type": "STRING",
+                "description": (
+                    "update | install | list | download_status | schedule | "
+                    "cancel_schedule | schedule_status (default: update)"
+                ),
+            },
+            "platform": {
+                "type": "STRING",
+                "description": "steam | epic | both (default: both)",
+            },
+            "game_name": {
+                "type": "STRING",
+                "description": "Game name (partial match supported)",
+            },
+            "app_id": {
+                "type": "STRING",
+                "description": "Steam AppID for install (optional)",
+            },
+            "hour": {
+                "type": "INTEGER",
+                "description": "Hour for scheduled update 0-23 (default: 3)",
+            },
+            "minute": {
+                "type": "INTEGER",
+                "description": "Minute for scheduled update 0-59 (default: 0)",
+            },
+            "shutdown_when_done": {
+                "type": "BOOLEAN",
+                "description": "Shut down PC when download finishes",
+            },
+        },
+        "required": [],
+    },
+    "risk_class": "destructive",
+    "handler": game_updater,
+}
+
+
 if __name__ == "__main__":
     if "--scheduled" in sys.argv:
         print(f"[GameUpdater] 🕐 Scheduled run at {datetime.now().strftime('%H:%M')}")
