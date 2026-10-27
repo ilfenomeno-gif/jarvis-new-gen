@@ -24,6 +24,7 @@ ALLOWED = {
     "setPartInfo": 1,
     "setControls": 1,
     "setClipping": 2,
+    "applyPhysics": 1,
     "setHudState": 6,
 }
 STYLES = ("hologram", "blueprint", "realistic", "flat", "toon")
@@ -221,6 +222,11 @@ def build_call(function: str, args: list) -> tuple[str, str]:
         if axis not in ("x", "y", "z", "off", "none"):
             raise ValueError("axis must be x, y, z or off")
         clean = [axis, _coord(args[1], 0, 1, "position")]
+    elif function == "applyPhysics":
+        mode = args[0].strip().lower() if isinstance(args[0], str) else ""
+        if mode not in ("drop", "impulse"):
+            raise ValueError("physics mode must be drop or impulse")
+        clean = [mode]
     elif function == "setPartInfo":
         if not isinstance(args[0], dict):
             raise ValueError("part info must be an object of part name -> description")

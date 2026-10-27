@@ -17,6 +17,7 @@ def test_build_call_validates_and_serialises():
     assert build_call("addMarker", ["10", 20, "x" * 100])[1].count("x") == 60
     assert build_call("clearMarkers", []) == ("clearMarkers", "[]")
     assert build_call("setClipping", ["x", 0.5]) == ("setClipping", '["x", 0.5]')
+    assert build_call("applyPhysics", [" DROP "]) == ("applyPhysics", '["drop"]')
     assert build_call("setHudState", ["listening", "#00ff88", 0.9, 1.1, 8, 0.3])[0] == "setHudState"
     for bad in (
         ("flyTo", [91, 0]), ("flyTo", [0, 181]), ("flyTo", ["a", 0]),
@@ -25,6 +26,7 @@ def test_build_call_validates_and_serialises():
         ("setHudState", ["unknown", "#00ff88", 0.9, 1.1, 8, 0.3]),
         ("setHudState", ["idle", "blue", 0.9, 1.1, 8, 0.3]),
         ("setClipping", ["w", 0.5]), ("setClipping", ["x", 2]),
+        ("applyPhysics", ["arbitrary"]), ("applyPhysics", [True]),
     ):
         with pytest.raises(ValueError):
             build_call(*bad)
@@ -54,7 +56,123 @@ def test_tool_routes_modes_and_reports_invalid_input():
     assert "Clipping enabled" in viewer_3d.viewer_3d({"mode": "set_clipping", "axis": "y"}, player=ui)
     assert ui.calls[-1] == ("setClipping", ["y", 0.5])
     assert "Invalid request" in viewer_3d.viewer_3d({"mode": "set_clipping", "axis": "invalid"}, player=ui)
+    assert "Physics drop" in viewer_3d.viewer_3d(
+        {"mode": "apply_physics", "physics_mode": "DROP"}, player=ui
+    )
+    assert ui.calls[-1] == ("applyPhysics", ["drop"])
+    assert "Invalid request" in viewer_3d.viewer_3d(
+        {"mode": "apply_physics", "physics_mode": "arbitrary"}, player=ui
+    )
     assert viewer_3d.TOOL["risk_class"] == "read"
+
+
+@needs_local_gpu_stack
+def test_real_page_physics_pc_and_explode_interactions():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --use-gl=angle --use-angle=swiftshader")
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    jarvis = ui_module.JarvisUI("")
+    win = jarvis._win
+    try:
+        viewer_3d.viewer_3d({"mode": "load_model", "model": "cad/pc.glb"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["status"] == "ready")
+        state = _poll_state(app, win, lambda s: s["physics"]["status"] == "ready")
+        assert state["model"]["name"] == "cad/pc.glb"
+
+        viewer_3d.viewer_3d({"mode": "explode_model", "on": True}, player=jarvis)
+        state = _poll_state(app, win, lambda s: s["model"]["explode"] == 1)
+        assert any(distance > 0.1 for distance in state["model"]["moved"])
+        viewer_3d.viewer_3d(
+            {"mode": "apply_physics", "physics_mode": "drop"}, player=jarvis
+        )
+        state = _poll_state(
+            app, win,
+            lambda s: s["physics"]["active"] and s["model"]["explode"] == 0,
+        )
+        assert state["physics"]["mode"] == "drop"
+        assert all(distance < 0.001 for distance in state["model"]["moved"])
+        state = _poll_state(
+            app, win,
+            lambda s: s["physics"]["active"]
+            and s["physics"]["bottom"] is not None
+            and abs(s["physics"]["bottom"]) <= 0.03
+            and abs(s["physics"]["velocityY"]) < 0.1,
+        )
+        assert abs(state["physics"]["bottom"]) <= 0.03
+
+        viewer_3d.viewer_3d({"mode": "explode_model", "on": True}, player=jarvis)
+        state = _poll_state(
+            app, win,
+            lambda s: not s["physics"]["active"] and s["model"]["explode"] == 1,
+        )
+        assert any(distance > 0.1 for distance in state["model"]["moved"])
+        viewer_3d.viewer_3d(
+            {"mode": "apply_physics", "physics_mode": "impulse"}, player=jarvis
+        )
+        state = _poll_state(
+            app, win,
+            lambda s: s["physics"]["active"] and s["physics"]["velocityY"] > 0.1,
+        )
+        assert state["physics"]["mode"] == "impulse"
+        assert all(distance < 0.001 for distance in state["model"]["moved"])
+
+        viewer_3d.viewer_3d({"mode": "clear_model"}, player=jarvis)
+        state = _poll_state(app, win, lambda s: not s["physics"]["active"])
+        assert state["model"]["status"] == "none"
+    finally:
+        win._layout_timer.stop()
+        win.close()
+
+
+@needs_local_gpu_stack
+def test_real_page_physics_apple_drop():
+    source = os.environ.get("JARVIS_TEST_APPLE_GLB")
+    if not source or not os.path.isfile(source):
+        pytest.skip("set JARVIS_TEST_APPLE_GLB to the apple GLB test asset")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --use-gl=angle --use-angle=swiftshader")
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from PyQt6.QtWidgets import QApplication
+    import ui as ui_module
+    from core.viewer3d import MODELS_DIR
+
+    MODELS_DIR.mkdir(exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix="pytest_apple_", suffix=".glb", dir=MODELS_DIR, delete=False
+    ) as temporary:
+        target = Path(temporary.name)
+    shutil.copyfile(source, target)
+    app = QApplication.instance() or QApplication(sys.argv)
+    jarvis = ui_module.JarvisUI("")
+    win = jarvis._win
+    try:
+        viewer_3d.viewer_3d(
+            {"mode": "load_model", "model": target.name}, player=jarvis
+        )
+        state = _poll_state(app, win, lambda s: s["model"]["status"] == "ready")
+        assert state["model"]["name"] == target.name
+        _poll_state(app, win, lambda s: s["physics"]["status"] == "ready")
+        viewer_3d.viewer_3d(
+            {"mode": "apply_physics", "physics_mode": "drop"}, player=jarvis
+        )
+        state = _poll_state(
+            app, win,
+            lambda s: s["physics"]["active"]
+            and s["physics"]["bottom"] is not None
+            and abs(s["physics"]["bottom"]) <= 0.03
+            and abs(s["physics"]["velocityY"]) < 0.1,
+        )
+        assert state["physics"]["mode"] == "drop"
+        assert abs(state["physics"]["bottom"]) <= 0.03
+    finally:
+        win._layout_timer.stop()
+        win.close()
+        target.unlink(missing_ok=True)
 
 
 @needs_local_gpu_stack
