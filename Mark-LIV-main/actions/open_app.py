@@ -390,6 +390,21 @@ def open_app(
     if player:
         player.write_log(f"[open_app] {app_name}")
 
+    if _SYSTEM == "Windows":
+        media_suffixes = {
+            ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".wma", ".opus",
+            ".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm", ".m4v", ".3gp",
+        }
+        is_legacy_target = (
+            normalized.startswith(("http://", "https://", "steam://", "ms-settings:"))
+            or os.path.splitext(normalized)[1].casefold() in media_suffixes
+        )
+        if not is_legacy_target:
+            return (
+                "For Windows desktop applications, use app_launcher with the app name "
+                "and obtain explicit user confirmation before launching."
+            )
+
     try:
         if launcher(normalized):
             return f"Opened {app_name}."

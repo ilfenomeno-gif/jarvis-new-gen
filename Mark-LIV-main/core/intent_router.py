@@ -130,9 +130,13 @@ def route_tool(name: str, args: dict, request: str = "") -> IntentDecision | Non
     decision = classify_target(target, request)
     if request:
         remember_explicit_intent(request, target)
-    if name in {"open_app", "game_updater", "file_processor", "file_controller", "web_search"}:
+    if name in {"open_app", "app_launcher", "game_updater", "file_processor", "file_controller", "web_search"}:
         if decision.category == "ambiguous":
             return decision
+        if decision.category == "game" and name == "app_launcher":
+            return IntentDecision("ambiguous", target, clarification=(
+                f"Signore, '{target}' sembra un gioco. Desidera avviarlo tramite Steam/Epic?"
+            ))
         if decision.category == "game" and name in {"file_processor", "file_controller", "web_search"}:
             return IntentDecision("ambiguous", target, clarification=(
                 f"Signore, '{target}' sembra un gioco. Desidera avviarlo tramite Steam/Epic?"

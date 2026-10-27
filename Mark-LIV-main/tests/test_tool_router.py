@@ -30,6 +30,14 @@ def test_vague_request_gets_always_and_base_only():
     assert "weather_report" not in out and "gev_mcp_get_earthquakes" not in out and "generate_3d_model" not in out
 
 
+def test_app_launcher_is_available_for_application_requests():
+    declarations = SAMPLE + [decl("app_launcher")]
+
+    assert "app_launcher" in names(
+        ToolRouter().select("apri il Blocco Note", declarations)
+    )
+
+
 def test_keywords_pick_matching_tools_in_italian_and_english():
     router = ToolRouter()
     assert {"generate_3d_model", "viewer_3d"} <= names(router.select("crea una sedia in 3D", SAMPLE))
