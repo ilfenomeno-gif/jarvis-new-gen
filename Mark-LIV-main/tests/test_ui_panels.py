@@ -234,22 +234,35 @@ def test_quantum_hud_draws_blueprint_and_uses_runtime_telemetry():
 
 
 def test_quantum_hud_applies_data_driven_visual_states():
-    from PyQt6.QtWidgets import QApplication
+    from types import SimpleNamespace
+
+    from core.hud_animator import HudAnimator
     import ui as ui_module
 
-    QApplication.instance() or QApplication(sys.argv)
-    hud = ui_module.HudCanvas("")
-    hud.set_jarvis_state("listening")
-    assert hud.animation_snapshot()["core_color"] == "#00ff88"
-    hud.set_jarvis_state("thinking")
-    assert hud.animation_snapshot()["core_color"] == "#ff8a00"
-    hud.set_jarvis_state("speaking")
-    assert hud.animation_snapshot()["core_color"] == "#ff00d4"
-    hud.set_jarvis_state("generating_3d")
-    assert hud.animation_snapshot()["particle_count"] == 48
+    class Signal:
+        def __init__(self):
+            self.values = []
+
+        def emit(self, value):
+            self.values.append(value)
+
+    hud = SimpleNamespace(
+        _hud_animator=HudAnimator(),
+        motion_state="idle",
+        _error_started=None,
+        _error_flash=0.0,
+        animationChanged=Signal(),
+    )
+    for state, key, expected in (
+        ("listening", "core_color", "#00ff88"),
+        ("thinking", "core_color", "#ff8a00"),
+        ("speaking", "core_color", "#ff00d4"),
+        ("generating_3d", "particle_count", 48),
+    ):
+        ui_module.HudCanvas.set_jarvis_state(hud, state)
+        assert hud._hud_animator.target_snapshot()[key] == expected
     assert hud.motion_state == "generating_3d"
-    hud.stop_animations()
-    hud.close()
+    assert hud.animationChanged.values[-1] == hud._hud_animator.target_snapshot()
 
 
 def test_generation_status_shows_backend_and_elapsed_seconds(monkeypatch):
