@@ -44,6 +44,12 @@ GROUPS: tuple[Group, ...] = (
            _GEV_TOOLS, ("gev_mcp_",)),
     _group("weather", r"meteo|weather|pioggia|piove|temperatur|forecast|previsioni|neve|vento|ombrello",
            {"weather_report", "gev_mcp_get_weather_map"}),
+    _group("memory_save", r"\bmemorizza\b|\bsalva (?:in )?memoria\b|\bremember that\b",
+           {"save_memory"}),
+    _group("memory_recall", r"\bwhat (?:did|do) i tell you\b|\bcosa ti ho (?:detto|chiesto)\b|\bcosa ricordi di me\b|\brecall memory\b",
+           {"recall_memory"}),
+    _group("system_status", r"\bstato (?:del )?sistema\b|\bsystem status\b|\bcpu\b|\bram\b|\bmemoria ram\b|\butilizzo del sistema\b|\bbatteria\b|\bbattery\b|\brisorse del (?:pc|sistema)\b",
+           {"system_status"}),
     _group("reminders", r"ricord|promemoria|remind|sveglia|alarm|timer|pomodoro|appuntament|calendar|agenda|\bnot[ae]\b|\bnotes?\b|evento",
            {"reminder", "calendar_agenda", "pomodoro_timer", "quick_notes"}),
     _group("messaging", r"messagg|whatsapp|telegram|\bsms\b|message|scrivi a|\binvia|\bmail|email|gmail",
@@ -109,3 +115,33 @@ class ToolRouter:
             if name in names or (prefixes and name.startswith(prefixes)) or not self.mapped(name):
                 selected.append(decl)
         return selected
+
+    def select_for_request(self, text: str, declarations: list[dict]) -> list[dict]:
+        """Return only tools explicitly mapped to this request, without session defaults."""
+        routing_text = text or ""
+        opening_app = re.search(
+            r"\b(?:apri|aprimi|avvia|avvii|lancia|launch|open|start)\b",
+            routing_text,
+            re.I,
+        )
+        notepad_target = re.search(r"\b(?:blocco note|notepad)\b", routing_text, re.I)
+        if opening_app and notepad_target:
+            routing_text = re.sub(r"\b(?:blocco note|notepad)\b", " ", routing_text, flags=re.I)
+            hits = [
+                group
+                for group in self._groups
+                if group.name != "ui" and group.pattern.search(routing_text)
+            ]
+        else:
+            hits = [group for group in self._groups if group.pattern.search(routing_text)]
+        if not hits:
+            return []
+
+        names = set().union(*(group.tools for group in hits))
+        prefixes = tuple(prefix for group in hits for prefix in group.prefixes)
+        return [
+            declaration
+            for declaration in declarations
+            if declaration["name"] in names
+            or (prefixes and declaration["name"].startswith(prefixes))
+        ]

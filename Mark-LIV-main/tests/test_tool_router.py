@@ -38,6 +38,41 @@ def test_app_launcher_is_available_for_application_requests():
     )
 
 
+def test_local_selection_uses_only_tools_relevant_to_the_current_request():
+    declarations = [
+        decl("app_launcher"),
+        decl("ui_layout"),
+        decl("quick_notes"),
+        decl("web_search"),
+        decl("recall_memory"),
+        decl("save_memory"),
+        decl("system_status"),
+    ]
+    router = ToolRouter()
+
+    assert router.select_for_request("Dimmi una curiosità", declarations) == []
+    assert names(router.select_for_request("Apri il blocco note", declarations)) == {
+        "app_launcher"
+    }
+    combined_request = names(
+        router.select_for_request(
+            "Apri il blocco note e ricordami di chiamare Marco",
+            declarations + [decl("reminder")],
+        )
+    )
+    assert {"app_launcher", "reminder", "quick_notes"} <= combined_request
+    assert "ui_layout" not in combined_request
+    assert names(router.select_for_request("Cosa ti ho detto sui miei orari?", declarations)) == {
+        "recall_memory"
+    }
+    assert names(router.select_for_request("Memorizza che preferisco risposte brevi", declarations)) == {
+        "save_memory"
+    }
+    assert names(router.select_for_request("Qual è lo stato del sistema?", declarations)) == {
+        "system_status"
+    }
+
+
 def test_keywords_pick_matching_tools_in_italian_and_english():
     router = ToolRouter()
     assert {"generate_3d_model", "viewer_3d"} <= names(router.select("crea una sedia in 3D", SAMPLE))

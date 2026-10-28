@@ -59,6 +59,45 @@ def test_find_executable_uses_shutil_which_for_named_exe(tmp_path, monkeypatch):
     assert app_launcher.find_executable("code") == executable.resolve()
 
 
+def test_find_executable_normalizes_localized_notepad_name(tmp_path, monkeypatch):
+    _configure_paths(tmp_path, monkeypatch)
+    executable = tmp_path / "Notepad.exe"
+    executable.write_bytes(b"")
+    searched = []
+    monkeypatch.setattr(
+        app_launcher,
+        "_find_on_path",
+        lambda name: searched.append(name) or executable,
+    )
+
+    assert app_launcher.find_executable("blocco note") == executable.resolve()
+    assert searched == ["notepad"]
+
+
+def test_launch_localized_notepad_alias_uses_canonical_audit_name(tmp_path, monkeypatch):
+    _configure_paths(tmp_path, monkeypatch)
+    executable = tmp_path / "Program Files" / "Notepad.exe"
+    executable.parent.mkdir()
+    executable.write_bytes(b"")
+    searched = []
+    opened = []
+    monkeypatch.setattr(
+        app_launcher,
+        "find_executable",
+        lambda name: searched.append(name) or executable,
+    )
+    monkeypatch.setattr(app_launcher, "_is_whitelisted", lambda _path: True)
+    monkeypatch.setattr(app_launcher.os, "startfile", opened.append, raising=False)
+
+    assert "Launch requested for notepad" in app_launcher.launch_app(
+        "blocco note", confirmed=True
+    )
+    assert searched == ["notepad"]
+    assert opened == [str(executable)]
+    entry = json.loads(app_launcher.LOG_PATH.read_text(encoding="utf-8").splitlines()[-1])
+    assert entry["app"] == "notepad"
+
+
 def test_find_executable_returns_none_for_unknown_app(tmp_path, monkeypatch):
     _configure_paths(tmp_path, monkeypatch)
 
