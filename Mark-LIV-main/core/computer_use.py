@@ -140,6 +140,36 @@ def _assert_same_foreground(hwnd: int, process_name: str | None = None) -> None:
         )
 
 
+def _assert_same_foreground_with_retry(
+    hwnd: int, process_name: str | None = None
+) -> None:
+    for attempt in range(3):
+        try:
+            _assert_same_foreground(hwnd, process_name)
+            return
+        except PermissionError:
+            if attempt == 2:
+                raise
+            time.sleep(0.2)
+
+
+def wait_for_foreground(process_name: str, timeout: float = 3.0) -> bool:
+    expected_process = ntpath.basename(process_name).casefold()
+    if not expected_process:
+        raise ValueError("process_name must be non-empty.")
+    if timeout < 0:
+        raise ValueError("timeout must be non-negative.")
+    deadline = time.monotonic() + timeout
+    while True:
+        _hwnd, current_process = foreground_process()
+        if current_process == expected_process:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.1, remaining))
+
+
 def capture_screen():
     """Capture the primary monitor in memory; no screenshot file is written."""
     try:
@@ -353,7 +383,7 @@ def click_uia_text(target: str, hwnd: int) -> str:
             f"Expected one enabled visible control named {target!r}; found {len(matches)}."
         )
     _check_emergency_stop()
-    _assert_same_foreground(hwnd)
+    _assert_same_foreground_with_retry(hwnd)
     matches[0].click_input()
     return "Clicked the matching UI Automation control."
 
@@ -439,7 +469,7 @@ def execute_input(parameters: dict[str, Any]) -> dict[str, Any]:
         x, y = parameters["x"], parameters["y"]
         _require_screen_coordinates(pyautogui, x, y)
         _check_emergency_stop()
-        _assert_same_foreground(hwnd, process_name)
+        _assert_same_foreground_with_retry(hwnd, process_name)
         if action == "click":
             pyautogui.click(x, y)
         elif action == "double_click":
@@ -453,36 +483,36 @@ def execute_input(parameters: dict[str, Any]) -> dict[str, Any]:
         _require_screen_coordinates(pyautogui, x1, y1)
         _require_screen_coordinates(pyautogui, x2, y2)
         _check_emergency_stop()
-        _assert_same_foreground(hwnd, process_name)
+        _assert_same_foreground_with_retry(hwnd, process_name)
         pyautogui.moveTo(x1, y1)
         _check_emergency_stop()
-        _assert_same_foreground(hwnd, process_name)
+        _assert_same_foreground_with_retry(hwnd, process_name)
         pyautogui.dragTo(x2, y2, button="left")
         result = f"Dragged from ({x1}, {y1}) to ({x2}, {y2})."
     elif action == "press":
         key = _validated_key(parameters["key"])
         _check_emergency_stop()
-        _assert_same_foreground(hwnd, process_name)
+        _assert_same_foreground_with_retry(hwnd, process_name)
         pyautogui.press(key)
         result = f"Pressed {key}."
     elif action == "hotkey":
         keys = _validated_hotkey(parameters["keys"])
         _check_emergency_stop()
-        _assert_same_foreground(hwnd, process_name)
+        _assert_same_foreground_with_retry(hwnd, process_name)
         pyautogui.hotkey(*keys)
         result = f"Pressed the {', '.join(keys)} shortcut."
     elif action == "scroll":
         direction = str(parameters.get("direction", "")).casefold()
         amount = parameters.get("amount", 1)
         _check_emergency_stop()
-        _assert_same_foreground(hwnd, process_name)
+        _assert_same_foreground_with_retry(hwnd, process_name)
         pyautogui.scroll(amount if direction == "up" else -amount)
         result = f"Scrolled {direction} by {amount}."
     else:
         text = parameters["text"]
         for character in text:
             _check_emergency_stop()
-            _assert_same_foreground(hwnd, process_name)
+            _assert_same_foreground_with_retry(hwnd, process_name)
             pyautogui.write(character, interval=0)
         result = f"Typed {len(text)} characters."
     _check_emergency_stop()

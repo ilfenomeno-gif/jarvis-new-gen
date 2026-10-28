@@ -8,7 +8,7 @@ import pytest
 
 from actions import app_launcher
 from actions import open_app as open_app_module
-from core import pattern_learner, registry_cli
+from core import computer_use, pattern_learner, registry_cli
 from core.action_loader import discover_actions
 from core.intent_router import route_tool
 
@@ -32,6 +32,7 @@ def _configure_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(app_launcher, "_BLOCKED_PARTS", frozenset({"downloads"}))
     monkeypatch.setenv("TEMP", str(tmp_path.parent / "other-temp"))
     monkeypatch.setenv("TMP", str(tmp_path.parent / "other-temp"))
+    monkeypatch.setattr(computer_use, "wait_for_foreground", lambda *_args, **_kwargs: True)
 
 
 def test_find_executable_uses_path_and_remembers_result(tmp_path, monkeypatch):
@@ -96,6 +97,31 @@ def test_launch_localized_notepad_alias_uses_canonical_audit_name(tmp_path, monk
     assert opened == [str(executable)]
     entry = json.loads(app_launcher.LOG_PATH.read_text(encoding="utf-8").splitlines()[-1])
     assert entry["app"] == "notepad"
+
+
+def test_app_launcher_waits_for_launched_process_to_become_foreground(tmp_path, monkeypatch):
+    _configure_paths(tmp_path, monkeypatch)
+    executable = tmp_path / "Program Files" / "Notepad.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"")
+    monkeypatch.setattr(app_launcher, "find_executable", lambda _name: executable)
+    monkeypatch.setattr(app_launcher, "_is_whitelisted", lambda _path: True)
+    monkeypatch.setattr(app_launcher.os, "startfile", lambda _path: None, raising=False)
+    waits = []
+
+    def wait(process_name, timeout):
+        waits.append((process_name, timeout))
+        return False
+
+    monkeypatch.setattr(computer_use, "wait_for_foreground", wait)
+
+    result = app_launcher.launch_app("notepad", confirmed=True)
+
+    assert waits == [("Notepad.exe", 3)]
+    assert "did not become foreground" in result
+    assert json.loads(app_launcher.LOG_PATH.read_text(encoding="utf-8").splitlines()[-1])[
+        "event"
+    ] == "launch_failed"
 
 
 def test_find_executable_returns_none_for_unknown_app(tmp_path, monkeypatch):

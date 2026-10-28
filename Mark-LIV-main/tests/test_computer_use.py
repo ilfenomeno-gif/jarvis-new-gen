@@ -236,6 +236,66 @@ def test_confirmed_input_rejects_a_changed_foreground_window(monkeypatch):
         })
 
 
+def test_confirmed_input_retries_transient_foreground_changes(monkeypatch):
+    calls = []
+    pyautogui = ModuleType("pyautogui")
+    pyautogui.size = lambda: (800, 600)
+    pyautogui.click = lambda x, y: calls.append((x, y))
+    monkeypatch.setitem(sys.modules, "pyautogui", pyautogui)
+    monkeypatch.setattr(computer_use, "_require_windows", lambda: None)
+    monkeypatch.setattr(computer_use, "arm_emergency_stop", lambda: None)
+    monkeypatch.setattr(computer_use, "_check_emergency_stop", lambda: None)
+    monkeypatch.setattr(
+        computer_use, "require_allowed_foreground", lambda: (13, "notepad.exe")
+    )
+    attempts = []
+
+    def assert_foreground(hwnd, process_name):
+        attempts.append((hwnd, process_name))
+        if len(attempts) < 3:
+            raise PermissionError("transient focus race")
+
+    monkeypatch.setattr(computer_use, "_assert_same_foreground", assert_foreground)
+    monkeypatch.setattr(computer_use.time, "sleep", lambda _seconds: None)
+
+    result = computer_use.execute_input({
+        "action": "click",
+        "x": 100,
+        "y": 200,
+        "confirmed": True,
+    })
+
+    assert len(attempts) == 3
+    assert calls == [(100, 200)]
+    assert result["process"] == "notepad.exe"
+
+
+def test_confirmed_input_stops_after_three_foreground_failures(monkeypatch):
+    monkeypatch.setattr(computer_use, "_require_windows", lambda: None)
+    monkeypatch.setattr(computer_use, "arm_emergency_stop", lambda: None)
+    monkeypatch.setattr(computer_use, "_check_emergency_stop", lambda: None)
+    monkeypatch.setattr(
+        computer_use, "require_allowed_foreground", lambda: (13, "notepad.exe")
+    )
+    attempts = []
+
+    def assert_foreground(_hwnd, _process_name):
+        attempts.append(True)
+        raise PermissionError("persistent focus race")
+
+    monkeypatch.setattr(computer_use, "_assert_same_foreground", assert_foreground)
+    monkeypatch.setattr(computer_use.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(PermissionError, match="persistent focus race"):
+        computer_use.execute_input({
+            "action": "press",
+            "key": "enter",
+            "confirmed": True,
+        })
+
+    assert len(attempts) == 3
+
+
 def test_confirmed_input_refuses_when_emergency_stop_is_latched(monkeypatch):
     monkeypatch.setattr(computer_use, "_require_windows", lambda: None)
     monkeypatch.setattr(computer_use, "arm_emergency_stop", lambda: None)
