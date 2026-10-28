@@ -953,6 +953,7 @@ class JarvisLive:
         self._brain_router = get_router()
         self._local_messages: list[dict[str, object]] = []
         self._local_chat_lock = asyncio.Lock()
+        self._local_pending_confirmation: dict[str, object] | None = None
         self._recent_user_texts: collections.deque[str] = collections.deque(maxlen=6)
         self._tools_used: set[str] = set()
         # Native accessibility methods are available immediately, while global
@@ -1283,6 +1284,7 @@ class JarvisLive:
             return
         if "torna al cloud" in lowered or "usa gemini" in lowered:
             self._brain_router.switch("gemini")
+            self._local_pending_confirmation = None
             self.ui.write_log("SYS: Cervello cloud attivo.")
             if self.session:
                 self.speak("Torno al cloud")
@@ -1331,6 +1333,7 @@ class JarvisLive:
             return True
         if "torna al cloud" in lowered or "usa gemini" in lowered:
             self._brain_router.switch("gemini")
+            self._local_pending_confirmation = None
             self.ui.write_log("SYS: Cervello cloud attivo.")
             return True
         if self._brain_router.backend != "local":
@@ -1350,15 +1353,29 @@ class JarvisLive:
     async def _handle_local_text(self, text: str) -> None:
         async with self._local_chat_lock:
             self.ui.set_state("THINKING")
-            if not self._local_messages:
-                self._local_messages.append({
-                    "role": "system",
-                    "content": _load_system_prompt(),
-                })
-            self._local_messages.append({"role": "user", "content": text})
-            tools = ollama_tool_declarations(self._select_tool_declarations())
-            assistant_text = ""
             try:
+                self._last_user_text = text
+                if await self._resolve_local_tool_confirmation(text):
+                    return
+                if not self._local_messages:
+                    self._local_messages.append({
+                        "role": "system",
+                        "content": (
+                            _load_system_prompt()
+                            + "\n\nLOCAL TOOL POLICY:\n"
+                            "For informational or conversational requests, answer directly "
+                            "without tools. Use only a tool provided for the current request; "
+                            "never call unrelated tools, create notes, or save memory unless "
+                            "the user explicitly asks. Never repeat a state-changing tool call. "
+                            "A desktop app launch requires a separate explicit user confirmation."
+                        ),
+                    })
+                self._local_messages.append({"role": "user", "content": text})
+                selected_tools = self._select_local_tool_declarations(text)
+                allowed_tool_names = {tool["name"] for tool in selected_tools}
+                tools = ollama_tool_declarations(selected_tools)
+                assistant_text = ""
+                completed_mutations: set[str] = set()
                 for _ in range(5):
                     events = await asyncio.to_thread(
                         lambda: list(self._brain_router.stream_chat(
@@ -1403,20 +1420,95 @@ class JarvisLive:
                         name = call.get("name")
                         if not isinstance(name, str) or not name:
                             raise ValueError("Ollama returned a tool call without a name")
-                        function_response = await self._execute_tool(SimpleNamespace(
-                            id=call.get("id") or f"call_{index}",
-                            name=name,
-                            args=call.get("args", {}),
-                        ))
+                        call_id = call.get("id") or f"call_{index}"
+                        args = call.get("args", {})
+                        if not isinstance(args, dict):
+                            raise ValueError(f"Ollama returned invalid arguments for {name}")
+                        declaration = next(
+                            (tool for tool in selected_tools if tool["name"] == name),
+                            {},
+                        )
+                        risk_class = declaration.get("risk_class", "read")
+                        if risk_class == "destructive" or name == "app_launcher":
+                            args = {key: value for key, value in args.items() if key != "confirmed"}
+
+                        should_stop = False
+                        pending_confirmation = False
+                        if name not in allowed_tool_names:
+                            tool_result = {
+                                "result": "Tool not available for this request; no action was taken."
+                            }
+                            assistant_text = (
+                                "Non posso eseguire uno strumento non pertinente alla richiesta."
+                            )
+                            should_stop = True
+                        elif name in completed_mutations:
+                            tool_result = {
+                                "result": (
+                                    "This state-changing tool already ran for this request; "
+                                    "no repeated action was taken."
+                                )
+                            }
+                            assistant_text = (
+                                "Ho interrotto un tentativo di ripetere la stessa azione."
+                            )
+                            should_stop = True
+                        else:
+                            function_response = await self._execute_tool(SimpleNamespace(
+                                id=call_id,
+                                name=name,
+                                args=args,
+                            ))
+                            tool_result = function_response.response
+                            if risk_class in {"write", "destructive"} or name in {
+                                "quick_notes",
+                                "save_memory",
+                                "app_launcher",
+                            }:
+                                completed_mutations.add(name)
+                            result_text = str(tool_result.get("result", ""))
+                            if (
+                                "Ask the user for explicit confirmation" in result_text
+                            ):
+                                self._local_pending_confirmation = {
+                                    "id": call_id,
+                                    "name": name,
+                                    "args": args,
+                                }
+                                target = args.get("name") or args.get("app_name") or name
+                                assistant_text = (
+                                    f"Signore, per completare {target} è necessaria la Sua "
+                                    "conferma esplicita. Risponda «Sì, confermo» per procedere."
+                                )
+                                pending_confirmation = True
                         self._local_messages.append({
                             "role": "tool",
                             "name": name,
                             "content": json.dumps(
-                                function_response.response,
+                                tool_result,
                                 ensure_ascii=False,
                                 default=str,
                             ),
                         })
+                        if should_stop or pending_confirmation:
+                            for skipped_call in tool_calls[index + 1:]:
+                                self._local_messages.append({
+                                    "role": "tool",
+                                    "name": skipped_call.get("name") or "unknown",
+                                    "content": json.dumps({
+                                        "result": (
+                                            "Skipped because this request requires confirmation "
+                                            "or the previous tool call was rejected."
+                                        )
+                                    }),
+                                })
+                            self._local_messages.append({
+                                "role": "assistant",
+                                "content": assistant_text,
+                            })
+                            break
+                    if self._local_pending_confirmation is not None or should_stop:
+                        break
                 else:
                     raise RuntimeError("Local model exceeded the tool-call limit")
 
@@ -1432,6 +1524,46 @@ class JarvisLive:
             finally:
                 if not self.ui.muted:
                     self.ui.set_state("LISTENING")
+
+    async def _resolve_local_tool_confirmation(self, text: str) -> bool:
+        pending = self._local_pending_confirmation
+        if pending is None:
+            return False
+
+        normalized = text.strip().lower()
+        affirmative = re.fullmatch(
+            r"(?:s[iì](?:\s*,?\s*confermo(?:\s+.+)?)?|"
+            r"confermo(?:\s+.+)?|procedi(?:\s+.+)?|approvo(?:\s+.+)?|"
+            r"yes(?:\s*,?\s*i confirm)?|confirm|go ahead)[.!]?",
+            normalized,
+        )
+        negative = re.fullmatch(
+            r"(?:no|annulla|cancella|non procedere)(?:\s+.+)?[.!]?",
+            normalized,
+        )
+        if not affirmative and not negative:
+            self._local_pending_confirmation = None
+            self.ui.write_log("SYS: Conferma dell'azione scaduta; richiesta diversa.")
+            return False
+
+        self._local_pending_confirmation = None
+        self._local_messages.append({"role": "user", "content": text})
+        if negative:
+            assistant_text = "Azione annullata; non è stato avviato nulla."
+        else:
+            args = dict(pending["args"])
+            args["confirmed"] = True
+            response = await self._execute_tool(SimpleNamespace(
+                id=pending["id"],
+                name=pending["name"],
+                args=args,
+            ))
+            assistant_text = str(response.response.get("result", ""))
+        self._local_messages.append({"role": "assistant", "content": assistant_text})
+        self._session_log.append(f"User: {text}")
+        self._session_log.append(f"{self._asst_name}: {assistant_text}")
+        self.ui.write_log(f"{self._asst_name}: {assistant_text}")
+        return True
 
     def _schedule_geo_route(self, text: str) -> None:
         decision = classify_and_route(text)
@@ -1535,17 +1667,23 @@ class JarvisLive:
         trim what is sent when the session is (re)built. The first connect has no
         user text and always gets the full set.
         """
-        everything = (
-            TOOL_DECLARATIONS
-            + self._action_registry.get_tool_declarations()
-            + self._plugin_registry.get_tool_declarations()
-        )
+        everything = self._all_tool_declarations()
         if os.environ.get("JARVIS_TOOL_ROUTING", "0") != "1" or not self._recent_user_texts:
             return everything
         selected = self._tool_router.select(" ".join(self._recent_user_texts), everything, self._tools_used)
         print(f"[JARVIS] 🧭 ToolRouter: {len(selected)}/{len(everything)} tool "
               f"({len(json.dumps(selected))}/{len(json.dumps(everything))} byte)")
         return selected
+
+    def _all_tool_declarations(self) -> list:
+        return (
+            TOOL_DECLARATIONS
+            + self._action_registry.get_tool_declarations()
+            + self._plugin_registry.get_tool_declarations()
+        )
+
+    def _select_local_tool_declarations(self, text: str) -> list:
+        return self._tool_router.select_for_request(text, self._all_tool_declarations())
 
     def _build_config(self) -> types.LiveConnectConfig:
         from datetime import datetime

@@ -38,6 +38,7 @@ CACHE_PATH = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Jarvis" / "app_launcher_cache.json"
 _HELP_APPS = frozenset({"code", "git", "node", "npm", "python", "python3"})
+_APP_NAME_ALIASES = {"blocconote": "notepad"}
 
 
 def enabled() -> bool:
@@ -59,6 +60,13 @@ def _validated_name(name: str) -> str | None:
 
 def _app_key(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", name.casefold())
+
+
+def _canonical_app_name(name: str) -> str | None:
+    requested = _validated_name(name)
+    if requested is None:
+        return None
+    return _APP_NAME_ALIASES.get(_app_key(requested), requested)
 
 
 def _name_variants(name: str) -> tuple[str, ...]:
@@ -295,7 +303,7 @@ def find_executable(name: str) -> Path | None:
     """Find an application in PATH, install directories, Start Menu, registry, then cache."""
     if not enabled() or os.name != "nt":
         return None
-    requested = _validated_name(name)
+    requested = _canonical_app_name(name)
     if requested is None:
         return None
 
@@ -406,7 +414,7 @@ def launch_app(
         return "app_launcher is disabled by JARVIS_APP_LAUNCHER=0."
     if os.name != "nt":
         return "app_launcher is supported only on Windows."
-    requested = _validated_name(name)
+    requested = _canonical_app_name(name)
     if requested is None:
         return "Invalid application name. Supply a name only, without a path or command."
     path = find_executable(requested)

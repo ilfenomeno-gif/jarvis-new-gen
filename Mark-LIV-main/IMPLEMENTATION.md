@@ -12,7 +12,7 @@ Scopo: trasformare Jarvis in un hub unificato (browser integrato, interazione at
 
 > Questo file è la **fonte di verità** del progetto. L'agente lo legge a ogni inizio ciclo e aggiorna `PROGRESS.md` a ogni fine ciclo.
 
-> 2026-10-28 — FASE 1 / hybrid brain: `core/brain_router.py` usa `qwen2.5:7b` come modello locale predefinito; input testuali e trascrizioni vocali in modalità local vengono generati da Ollama, con tool call dispatch. Test mirati e streaming live Ollama verificati. Limiti: l'app richiede ancora la sessione Gemini per il ciclo audio/trascrizione vocale; non è offline totale e non ha TTS locale. L'avvio GUI con account reale non è stato convalidato.
+> 2026-10-28 — FASE 1 / hybrid brain: `core/brain_router.py` usa `qwen2.5:7b` come modello locale predefinito; input testuali e trascrizioni vocali in modalità local vengono generati da Ollama, con tool call dispatch. Il routing locale limita gli strumenti all'intento del singolo comando, rifiuta tool non dichiarati per quel turno e richiede una conferma testuale esplicita per azioni distruttive; l'alias italiano "blocco note" viene normalizzato a Notepad. Verifica GUI live su testo: Gemini, switch Ollama, risposta locale senza scritture di note, avvio di Notepad dopo conferma esplicita e ritorno al cloud superati. Suite non-live: 596 passed, 8 skipped, 13 deselected. Il microfono è stato tenuto muto durante il test: la prova vocale fisica non è stata eseguita. Limiti: il ciclo audio/trascrizione dipende ancora da Gemini; non è offline totale e non ha TTS locale.
 
 ---
 
