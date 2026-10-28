@@ -17,6 +17,7 @@ def _loop(
     wait_results=None,
     kill_switch=lambda: False,
     foreground=lambda: FOREGROUND,
+    uia_tree=lambda: {"controls": []},
 ):
     executed = []
     prompts = []
@@ -44,7 +45,7 @@ def _loop(
         planner=planner,
         capture=capture,
         ocr=lambda **_kwargs: [{"text": "Test"}],
-        uia_tree=lambda: {"controls": []},
+        uia_tree=uia_tree,
         execute_input=execute,
         wait_for_change=wait_for_change,
         foreground=foreground,
@@ -234,6 +235,30 @@ def test_foreground_change_before_action_stops_without_input(tmp_path):
 
     assert result["result"] == "failed"
     assert "foreground window changed" in result["reason"]
+    assert not executed
+
+
+def test_foreground_change_during_uia_collection_stops_before_planning(tmp_path):
+    current = {"foreground": FOREGROUND}
+    planned = []
+
+    def collect_uia():
+        current["foreground"] = (456, "chrome.exe")
+        return {"controls": []}
+
+    loop, executed, _prompts, _captures = _loop(
+        tmp_path,
+        [{"action": "click", "target": {"x": 20, "y": 30}}],
+        foreground=lambda: current["foreground"],
+        uia_tree=collect_uia,
+    )
+    loop._planner = lambda *_args: planned.append(True)
+
+    result = asyncio.run(loop.run("Click the button"))
+
+    assert result["result"] == "failed"
+    assert "foreground window changed" in result["reason"]
+    assert not planned
     assert not executed
 
 

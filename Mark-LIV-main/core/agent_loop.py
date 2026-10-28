@@ -312,6 +312,11 @@ class AgentLoop:
                         return {"result": "killed"}
                     return {"result": "failed", "reason": stopped.removeprefix("failed: ")}
                 tree = await self._invoke(self._uia_tree)
+                stopped = self._check_session(expected_foreground)
+                if stopped:
+                    if stopped == "killed":
+                        return {"result": "killed"}
+                    return {"result": "failed", "reason": stopped.removeprefix("failed: ")}
                 elements = {"ocr": words, "uia": tree}
                 plan = _decode_plan(await asyncio.wait_for(
                     self._invoke(
