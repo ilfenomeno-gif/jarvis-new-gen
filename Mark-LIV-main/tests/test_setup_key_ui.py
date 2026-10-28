@@ -82,5 +82,19 @@ def test_warning_dialog_names_the_file(monkeypatch):
 
     ui.MainWindow._warn_plaintext_key(window)
 
-    assert any("PLAIN TEXT" in line for line in logs)
+    assert logs and "api_keys.json" in logs[0]
     assert shown and "api_keys.json" in shown[0][2]
+
+
+def test_plaintext_warning_is_explicit_when_fallback_is_enabled(monkeypatch):
+    monkeypatch.setenv("JARVIS_ALLOW_PLAINTEXT_KEY", "1")
+    shown = []
+    monkeypatch.setattr(ui.QMessageBox, "warning",
+                        staticmethod(lambda *args: shown.append(args)))
+    logs = []
+    window = SimpleNamespace(_log=SimpleNamespace(append_log=logs.append))
+
+    ui.MainWindow._warn_plaintext_key(window)
+
+    assert logs and "PLAIN TEXT" in logs[0]
+    assert shown and "IN CHIARO" in shown[0][2]
