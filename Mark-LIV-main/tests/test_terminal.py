@@ -1,8 +1,15 @@
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
-from actions.terminal import MAX_OUTPUT_LENGTH, TRUNCATION_MARKER, _result, terminal_run
+from actions import terminal
+from actions.terminal import (
+    MAX_OUTPUT_LENGTH,
+    TRUNCATION_MARKER,
+    terminal_run,
+)
 
 
 def test_terminal_run_is_discovered_as_a_write_action():
@@ -24,70 +31,66 @@ def test_terminal_run_is_discovered_as_a_write_action():
 
 
 @pytest.mark.parametrize(
-    ("command", "matched"),
-    [
-        ("rm -rf C:\\temp", "rm -rf"),
-        (r"del /f /s C:\temp", "del /f /s"),
-        ("format C:", "format"),
-        ("shutdown /s /t 0", "shutdown"),
-        (r"reg delete HKCU\Software\Example", "reg delete"),
-        (
-            "Remove-Item -Recurse -Force C:\\temp",
-            "Remove-Item -Recurse -Force",
-        ),
-        (r"rd /s /q C:\temp", "rd /s /q"),
-    ],
+    "command",
+    ["echo hello", r"del /f /s C:\temp"],
 )
-def test_terminal_run_requests_confirmation_for_every_denylist_pattern(
-    command, matched
+def test_terminal_run_requires_confirmation_then_executes_command(
+    command, monkeypatch
 ):
-    result = terminal_run({"command": command})
+    run = Mock(return_value=SimpleNamespace(
+        stdout="hello\n",
+        stderr="",
+        returncode=0,
+    ))
+    monkeypatch.setattr(terminal.subprocess, "run", run)
 
-    assert result == {
+    pending = terminal_run({"command": command})
+
+    assert pending == {
         "result": "Ask the user for explicit confirmation",
-        "matched": matched,
+        "command": command,
     }
+    run.assert_not_called()
 
-
-def test_terminal_run_echoes_safe_command():
-    result = terminal_run({"command": "echo hello"})
+    result = terminal_run({"command": command, "confirmed": True})
 
     assert result == {"stdout": "hello\n", "stderr": "", "returncode": 0}
+    run.assert_called_once_with(
+        command,
+        shell=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=None,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
-def test_terminal_run_does_not_execute_denylisted_command_after_confirmation():
+def test_terminal_run_returns_timeout_after_confirmation(monkeypatch):
+    run = Mock(side_effect=terminal.subprocess.TimeoutExpired("sleep 5", 1))
+    monkeypatch.setattr(terminal.subprocess, "run", run)
+
     result = terminal_run({
-        "command": r"del /f /s C:\temp",
+        "command": "sleep 5",
+        "timeout": 1,
         "confirmed": True,
     })
 
-    assert result["returncode"] == 2
-    assert "not supported" in result["stderr"]
-
-
-def test_terminal_run_returns_timeout_for_long_sleep():
-    result = terminal_run({"command": "sleep 5", "timeout": 1})
-
     assert result == {"stdout": "", "stderr": "timeout", "returncode": -1}
+    run.assert_called_once()
 
 
-def test_terminal_run_truncates_long_output():
-    result = terminal_run({"command": f"echo {'x' * 5000}"})
+def test_terminal_run_truncates_long_stdout_and_stderr(monkeypatch):
+    run = Mock(return_value=SimpleNamespace(
+        stdout="x" * (MAX_OUTPUT_LENGTH + 1),
+        stderr="y" * (MAX_OUTPUT_LENGTH + 1),
+        returncode=0,
+    ))
+    monkeypatch.setattr(terminal.subprocess, "run", run)
 
-    assert len(result["stdout"]) == MAX_OUTPUT_LENGTH + len(TRUNCATION_MARKER)
-    assert result["stdout"].endswith(TRUNCATION_MARKER)
+    result = terminal_run({"command": "echo hello", "confirmed": True})
 
-
-def test_terminal_run_truncates_long_stderr():
-    result = _result(stderr="x" * 5000)
-
-    assert len(result["stderr"]) == MAX_OUTPUT_LENGTH + len(TRUNCATION_MARKER)
-    assert result["stderr"].endswith(TRUNCATION_MARKER)
-
-
-def test_terminal_run_refuses_unallowlisted_shell_command():
-    result = terminal_run({"command": "python -c \"import os; print(os.listdir())\""})
-
-    assert result["returncode"] == 2
-    assert result["stdout"] == ""
-    assert "Unsupported command" in result["stderr"]
+    assert result["stdout"] == "x" * MAX_OUTPUT_LENGTH + TRUNCATION_MARKER
+    assert result["stderr"] == "y" * MAX_OUTPUT_LENGTH + TRUNCATION_MARKER
+    assert result["returncode"] == 0

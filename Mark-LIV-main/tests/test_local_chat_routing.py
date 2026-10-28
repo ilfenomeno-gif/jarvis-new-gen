@@ -243,6 +243,118 @@ def test_local_ambiguous_app_launch_still_requires_separate_confirmation():
     assert live.ui.logs[-1] == "JARVIS: Launch completed for Notepad."
 
 
+def test_local_terminal_command_runs_only_after_separate_confirmation():
+    router = FakeRouter([[
+        {
+            "type": "tool_call",
+            "id": "call-terminal",
+            "name": "terminal_run",
+            "args": {"command": "echo hello", "confirmed": True},
+        },
+        {"type": "done", "full_text": ""},
+    ]])
+    live = _live(router)
+    live._select_local_tool_declarations = lambda _text: [{
+        "name": "terminal_run",
+        "risk_class": "write",
+    }]
+    executed = []
+
+    async def execute_tool(call, **kwargs):
+        executed.append((call.name, call.args.copy()))
+        if kwargs:
+            executed[-1] = (call.name, call.args.copy(), kwargs)
+        if call.args.get("confirmed") is True:
+            return SimpleNamespace(response={
+                "stdout": "hello\n",
+                "stderr": "",
+                "returncode": 0,
+            })
+        return SimpleNamespace(response={
+            "result": "Ask the user for explicit confirmation",
+            "command": call.args["command"],
+        })
+
+    live._execute_tool = execute_tool
+    asyncio.run(live._handle_local_text("Esegui il comando echo hello"))
+
+    assert executed == [("terminal_run", {"command": "echo hello"})]
+    assert live._local_pending_confirmation == {
+        "id": "call-terminal",
+        "name": "terminal_run",
+        "args": {"command": "echo hello"},
+    }
+    assert "echo hello" in live.ui.logs[-1]
+
+    asyncio.run(live._handle_local_text("Sì, confermo"))
+
+    assert executed == [
+        ("terminal_run", {"command": "echo hello"}),
+        (
+            "terminal_run",
+            {"command": "echo hello", "confirmed": True},
+            {"user_confirmed": True},
+        ),
+    ]
+    assert live._local_pending_confirmation is None
+    assert '"stdout": "hello\\n"' in live.ui.logs[-1]
+
+
+def test_terminal_tool_rejects_model_confirmation_and_binds_command_to_user_approval(
+    monkeypatch,
+):
+    import main
+
+    live = _live(FakeRouter([]))
+    live._last_user_text = "Esegui il comando echo hello"
+    executed = []
+
+    class ActionRegistry:
+        def has(self, name):
+            return name == "terminal_run"
+
+        def run(self, name, args, ctx=None):
+            executed.append((name, args.copy()))
+            return {"stdout": "hello\n", "stderr": "", "returncode": 0}
+
+    live._action_registry = ActionRegistry()
+    monkeypatch.setattr(main, "require_policy_file", lambda: None)
+
+    async def run():
+        pending = await live._execute_tool(SimpleNamespace(
+            id="call-terminal",
+            name="terminal_run",
+            args={"command": "echo hello", "confirmed": True},
+        ))
+        assert pending.response == {
+            "result": "Ask the user for explicit confirmation",
+            "command": "echo hello",
+        }
+        assert executed == []
+        assert live._local_pending_confirmation == {
+            "id": "call-terminal",
+            "name": "terminal_run",
+            "args": {"command": "echo hello"},
+        }
+
+        live._last_user_text = "Sì, confermo"
+        result = await live._execute_tool(SimpleNamespace(
+            id="call-confirmed",
+            name="terminal_run",
+            args={"command": "echo hello", "confirmed": True},
+        ))
+        assert result.response == {
+            "stdout": "hello\n",
+            "stderr": "",
+            "returncode": 0,
+        }
+
+    asyncio.run(run())
+    assert executed == [
+        ("terminal_run", {"command": "echo hello", "confirmed": True})
+    ]
+
+
 def test_local_voice_transcript_is_routed_to_local_model():
     live = _live(FakeRouter([]))
     handled = []
