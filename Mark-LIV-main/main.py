@@ -86,6 +86,7 @@ from core.intent_router        import route_tool
 from core.geo_router           import classify_and_route
 from core.prompt_router        import PromptRouter
 from core.tool_router          import ToolRouter
+from core.brain_router         import get_router
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
 from core                      import audio_devices
@@ -948,6 +949,7 @@ class JarvisLive:
         self._pattern_style = None
         self._prompt_router = PromptRouter()
         self._tool_router = ToolRouter()
+        self._brain_router = get_router()
         self._recent_user_texts: collections.deque[str] = collections.deque(maxlen=6)
         self._tools_used: set[str] = set()
         # Native accessibility methods are available immediately, while global
@@ -1264,6 +1266,17 @@ class JarvisLive:
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
             return
+
+        lowered = text.strip().lower()
+        if "passa al cervello locale" in lowered or "usa ollama" in lowered:
+            self._brain_router.switch("local")
+            self.speak("Cervello locale attivo")
+            return
+        if "torna al cloud" in lowered or "usa gemini" in lowered:
+            self._brain_router.switch("gemini")
+            self.speak("Torno al cloud")
+            return
+
         self._observe_pattern_feedback(text)
         self._schedule_geo_route(text)
         dynamic_instruction = self._prompt_router.instruction_for(text)
