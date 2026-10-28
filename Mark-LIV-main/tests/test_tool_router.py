@@ -48,6 +48,19 @@ def test_terminal_run_is_selected_only_for_explicit_terminal_requests():
     assert router.select_for_request("Dimmi una curiosità", declarations) == []
 
 
+def test_computer_use_tools_are_selected_for_perception_and_input_requests():
+    declarations = [decl("computer_perception"), decl("computer_input")]
+    router = ToolRouter()
+
+    assert names(
+        router.select_for_request("Leggi il testo sullo schermo con OCR", declarations)
+    ) == {"computer_perception"}
+    assert names(
+        router.select_for_request("Clicca sul pulsante in Notepad", declarations)
+    ) == {"computer_input"}
+    assert router.select_for_request("Dimmi una curiosità", declarations) == []
+
+
 def test_local_selection_uses_only_tools_relevant_to_the_current_request():
     declarations = [
         decl("app_launcher"),

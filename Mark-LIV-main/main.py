@@ -955,6 +955,7 @@ class JarvisLive:
         self._local_messages: list[dict[str, object]] = []
         self._local_chat_lock = asyncio.Lock()
         self._local_pending_confirmation: dict[str, object] | None = None
+        self._computer_input_confirmation_available = False
         self._recent_user_texts: collections.deque[str] = collections.deque(maxlen=6)
         self._tools_used: set[str] = set()
         # Native accessibility methods are available immediately, while global
@@ -1396,6 +1397,12 @@ class JarvisLive:
             self.ui.set_state("THINKING")
             try:
                 self._last_user_text = text
+                pending = self._local_pending_confirmation
+                self._computer_input_confirmation_available = bool(
+                    pending
+                    and pending.get("name") == "computer_input"
+                    and self._is_explicit_confirmation(text)
+                )
                 if await self._resolve_local_tool_confirmation(text):
                     return
                 if not self._local_messages:
@@ -1412,7 +1419,9 @@ class JarvisLive:
                             "A direct request to open a recognized app is itself explicit "
                             "confirmation; indirect or ambiguous requests still require a "
                             "separate confirmation. Every terminal command requires a separate "
-                            "explicit user confirmation before execution."
+                            "explicit user confirmation before execution. Every Computer Use "
+                            "mouse or keyboard input requires a separate explicit confirmation; "
+                            "perform one input action only and never chain actions."
                         ),
                     })
                 self._local_messages.append({"role": "user", "content": text})
@@ -1477,6 +1486,7 @@ class JarvisLive:
                         if risk_class == "destructive" or name in {
                             "app_launcher",
                             "terminal_run",
+                            "computer_input",
                         }:
                             args = {key: value for key, value in args.items() if key != "confirmed"}
                             if name == "app_launcher" and self._is_explicit_app_launch(text, args):
@@ -1514,6 +1524,7 @@ class JarvisLive:
                                 "quick_notes",
                                 "save_memory",
                                 "app_launcher",
+                                "computer_input",
                             }:
                                 completed_mutations.add(name)
                             result_value = tool_result.get("result", "")
@@ -1534,6 +1545,15 @@ class JarvisLive:
                                         "Signore, eseguire questo comando? "
                                         f"`{args.get('command', '')}`. Risponda «Sì, confermo» "
                                         "per procedere."
+                                    )
+                                elif name == "computer_input":
+                                    from core.computer_use import describe_input_request
+
+                                    action_description = describe_input_request(args)
+                                    assistant_text = (
+                                        "Signore, autorizza questa singola azione di input "
+                                        f"nella finestra attiva: {action_description}? "
+                                        "Risponda «Sì, confermo» per procedere."
                                     )
                                 else:
                                     target = args.get("name") or args.get("app_name") or name
@@ -1593,6 +1613,8 @@ class JarvisLive:
 
         normalized = text.strip().lower()
         affirmative = self._is_explicit_confirmation(text)
+        if pending.get("name") == "computer_input":
+            self._computer_input_confirmation_available = affirmative
         negative = re.fullmatch(
             r"(?:no|annulla|cancella|non procedere)(?:\s+.+)?[.!]?",
             normalized,
@@ -1602,13 +1624,17 @@ class JarvisLive:
             self.ui.write_log("SYS: Conferma dell'azione scaduta; richiesta diversa.")
             return False
 
-        self._local_pending_confirmation = None
         self._local_messages.append({"role": "user", "content": text})
         if negative:
+            self._local_pending_confirmation = None
             assistant_text = "Azione annullata; non è stato avviato nulla."
         else:
             args = dict(pending["args"])
             args["confirmed"] = True
+            if pending["name"] == "computer_input":
+                self._local_pending_confirmation = pending
+            else:
+                self._local_pending_confirmation = None
             tool_call = SimpleNamespace(
                 id=pending["id"],
                 name=pending["name"],
@@ -1857,6 +1883,8 @@ class JarvisLive:
         logged_args = dict(args)
         if name == "open_website" and "url" in logged_args:
             logged_args["url"] = "[URL REDACTED]"
+        if name == "computer_input" and "text" in logged_args:
+            logged_args["text"] = "[REDACTED]"
         print(f"[JARVIS] 🔧 {name}  {logged_args}")
         self.ui.set_state("THINKING")
 
@@ -1896,6 +1924,127 @@ class JarvisLive:
                     },
                 )
             self._local_pending_confirmation = None
+
+        if name == "computer_input":
+            pending = getattr(self, "_local_pending_confirmation", None)
+            requested_args = {
+                key: value
+                for key, value in args.items()
+                if key != "confirmed" and not key.startswith("_")
+            }
+            from core.computer_use import (
+                arm_emergency_stop,
+                describe_input_request,
+                require_allowed_foreground,
+                validate_input_request,
+            )
+
+            try:
+                validate_input_request(requested_args)
+            except (TypeError, ValueError) as exc:
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={"result": f"Invalid input request: {exc}"},
+                )
+            if (
+                pending
+                and pending.get("name") == name
+                and pending.get("args") == requested_args
+                and getattr(
+                    self, "_computer_input_confirmation_available", False
+                )
+                and self._is_explicit_confirmation(
+                    getattr(self, "_last_user_text", "")
+                )
+            ):
+                try:
+                    hwnd, process_name = require_allowed_foreground()
+                except Exception as exc:
+                    self._local_pending_confirmation = None
+                    self._computer_input_confirmation_available = False
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={"result": f"Input disabled: {exc}"},
+                    )
+                if (
+                    hwnd != pending.get("window_handle")
+                    or process_name != pending.get("process_name")
+                ):
+                    self._local_pending_confirmation = None
+                    self._computer_input_confirmation_available = False
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={
+                            "result": (
+                                "The foreground window changed after the request. "
+                                "No input was sent; request the action again."
+                            )
+                        },
+                    )
+                args = dict(pending["args"])
+                args["confirmed"] = True
+                args["_expected_window"] = pending["window_handle"]
+                args["_expected_process"] = pending["process_name"]
+                self._local_pending_confirmation = None
+                self._computer_input_confirmation_available = False
+            elif (
+                pending
+                and pending.get("name") == name
+                and getattr(
+                    self, "_computer_input_confirmation_available", False
+                )
+            ):
+                self._local_pending_confirmation = None
+                self._computer_input_confirmation_available = False
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={
+                        "result": (
+                            "The requested input differs from the action the user "
+                            "confirmed. No input was performed; ask for confirmation again."
+                        ),
+                        "action": describe_input_request(requested_args),
+                    },
+                )
+            elif pending and pending.get("name") == name:
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={
+                        "result": "Ask the user for explicit confirmation",
+                        "action": describe_input_request(pending["args"]),
+                    },
+                )
+            else:
+                try:
+                    validate_input_request(requested_args)
+                    arm_emergency_stop()
+                    hwnd, process_name = require_allowed_foreground()
+                except Exception as exc:
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={"result": f"Input disabled: {exc}"},
+                    )
+                self._local_pending_confirmation = {
+                    "id": fc.id,
+                    "name": name,
+                    "args": requested_args,
+                    "window_handle": hwnd,
+                    "process_name": process_name,
+                }
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={
+                        "result": "Ask the user for explicit confirmation",
+                        "action": describe_input_request(requested_args),
+                    },
+                )
 
         if name == "save_memory":
             category = args.get("category", "notes")
@@ -2444,9 +2593,16 @@ class JarvisLive:
                                 pending_confirmation = getattr(
                                     self, "_local_pending_confirmation", None
                                 )
+                                self._computer_input_confirmation_available = bool(
+                                    pending_confirmation
+                                    and pending_confirmation.get("name")
+                                    == "computer_input"
+                                    and self._is_explicit_confirmation(full_in)
+                                )
                                 if (
                                     pending_confirmation
-                                    and pending_confirmation.get("name") == "terminal_run"
+                                    and pending_confirmation.get("name")
+                                    in {"terminal_run", "computer_input"}
                                     and getattr(
                                         getattr(self, "_brain_router", None),
                                         "backend",
@@ -3158,6 +3314,14 @@ class JarvisLive:
             except RuntimeError as exc:
                 message = f"SYS: Accessibility hotkeys could not be fully removed: {exc}"
                 print(f"[Accessibility] {message}")
+                self.ui.write_log(message)
+            try:
+                from core.computer_use import stop_emergency_stop
+
+                stop_emergency_stop()
+            except RuntimeError as exc:
+                message = f"SYS: Emergency input hotkey could not be fully removed: {exc}"
+                print(f"[Computer Use] {message}")
                 self.ui.write_log(message)
             # GEV lifecycle hook
             if not self._plugins_stopped_evt.is_set():
