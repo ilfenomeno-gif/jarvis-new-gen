@@ -616,11 +616,11 @@ TOOL_DECLARATIONS = [
     {
         "name": "game_updater",
         "description": (
-            "Use for Steam or Epic operations that manage games: opening, installing, "
-            "downloading, updating, listing installed games, checking download status, "
-            "or scheduling updates. Opening a named game should launch it through Steam "
-            "when it is in the Steam catalog. "
-            "This tool has priority over file search for every videogame request. "
+            "Use for Steam or Epic game management: installing, downloading, updating, "
+            "listing installed games, checking download status, or scheduling updates. "
+            "Do not launch a named game; use app_launcher to open a launcher, or "
+            "launch_steam_game only with a Steam App ID and explicit confirmation. "
+            "Do not attempt in-game control. "
             "NEVER use browser_control or web_search for Steam/Epic."
         ),
         "parameters": {
@@ -1292,6 +1292,13 @@ class JarvisLive:
                 self.speak("Torno al cloud")
             return
 
+        pending = self._local_pending_confirmation
+        if pending and pending.get("name") == "launch_steam_game":
+            asyncio.run_coroutine_threadsafe(
+                self._handle_pending_game_launch_confirmation(text), self._loop
+            )
+            return
+
         if self._brain_router.backend == "local":
             future = asyncio.run_coroutine_threadsafe(
                 self._handle_local_text(text), self._loop
@@ -1338,6 +1345,11 @@ class JarvisLive:
             self._local_pending_confirmation = None
             self.ui.write_log("SYS: Cervello cloud attivo.")
             return True
+        pending = self._local_pending_confirmation
+        if pending and pending.get("name") == "launch_steam_game":
+            task = asyncio.create_task(self._handle_pending_game_launch_confirmation(text))
+            task.add_done_callback(self._report_local_chat_error)
+            return True
         if self._brain_router.backend != "local":
             return False
 
@@ -1351,6 +1363,36 @@ class JarvisLive:
         except Exception as exc:
             logging.getLogger(__name__).exception("Local brain request failed")
             self.ui.write_log(f"ERR: Cervello locale non disponibile: {exc}")
+
+    async def _handle_pending_game_launch_confirmation(self, text: str) -> None:
+        pending = self._local_pending_confirmation
+        if not pending or pending.get("name") != "launch_steam_game":
+            return
+        normalized = text.strip().lower()
+        if self._is_explicit_confirmation(text):
+            tool_call = SimpleNamespace(
+                id=pending["id"],
+                name=pending["name"],
+                args=dict(pending["args"]),
+            )
+            response = await self._execute_tool(tool_call, user_confirmed=True)
+            self._local_pending_confirmation = None
+            value = response.response.get("result", "")
+            message = str(value.get("result", value) if isinstance(value, dict) else value)
+            self.ui.write_log(f"{self._asst_name}: {message}")
+            self.speak(message)
+            return
+        if re.fullmatch(
+            r"(?:no|annulla|cancella|non procedere)(?:\s+.+)?[.!]?",
+            normalized,
+        ):
+            self._local_pending_confirmation = None
+            message = "Avvio annullato; il gioco non è stato lanciato."
+            self.ui.write_log(f"{self._asst_name}: {message}")
+            self.speak(message)
+            return
+        self._local_pending_confirmation = None
+        self.ui.write_log("SYS: Conferma dell'avvio scaduta; richiesta diversa.")
 
     @staticmethod
     def _is_explicit_app_launch(text: str, args: dict) -> bool:
@@ -1382,6 +1424,19 @@ class JarvisLive:
                 if candidate and candidate.casefold() == requested_app.casefold():
                     return True
         return False
+
+    @staticmethod
+    def _is_gameplay_control_request(text: str) -> bool:
+        match = re.search(
+            r"\b(?:gioca|giocare)\s+(?:a\s+)?(?P<target>[\w-]+)",
+            text,
+            re.I,
+        )
+        return bool(
+            match
+            and match.group("target").casefold()
+            not in {"musica", "canzone", "spotify", "radio"}
+        )
 
     @staticmethod
     def _explicit_app_type_request(text: str) -> dict[str, str] | None:
@@ -1459,6 +1514,22 @@ class JarvisLive:
                     and self._is_explicit_confirmation(text)
                 )
                 if await self._resolve_local_tool_confirmation(text):
+                    return
+                if self._is_gameplay_control_request(text):
+                    assistant_text = (
+                        "Posso avviare Steam o Epic e lanciare un gioco tramite App ID "
+                        "Steam dopo conferma, ma non posso controllarlo in-game: "
+                        "anti-cheat e fullscreen possono bloccare input e cattura."
+                    )
+                    self._local_messages.extend([
+                        {"role": "user", "content": text},
+                        {"role": "assistant", "content": assistant_text},
+                    ])
+                    self._session_log.extend([
+                        f"User: {text}",
+                        f"{self._asst_name}: {assistant_text}",
+                    ])
+                    self.ui.write_log(f"{self._asst_name}: {assistant_text}")
                     return
                 if not self._local_messages:
                     self._local_messages.append({
@@ -1565,6 +1636,7 @@ class JarvisLive:
                             "terminal_run",
                             "computer_input",
                             "agent_loop",
+                            "launch_steam_game",
                         }:
                             args = {
                                 key: value
@@ -1630,7 +1702,15 @@ class JarvisLive:
                                 result_text = str(result_value.get("result", ""))
                             else:
                                 result_text = str(result_value)
-                            if (
+                            if name == "launch_steam_game":
+                                assistant_text = str(
+                                    tool_result.get("prompt")
+                                    or (
+                                        f"Conferma l'avvio del gioco Steam con App ID "
+                                        f"{args.get('app_id', '')}? Risponda «Sì, confermo»."
+                                    )
+                                )
+                            elif (
                                 name == "app_launcher"
                                 and compound_request
                                 and compound_request["opens_app"]
@@ -1683,6 +1763,15 @@ class JarvisLive:
                                             "Ctrl+Alt+Esc interrompe. Le immagini dello "
                                             "schermo saranno inviate a Gemini cloud. "
                                             "Risponda «Sì, procedo»."
+                                        )
+                                    )
+                                elif name == "launch_steam_game":
+                                    assistant_text = str(
+                                        tool_result.get("prompt")
+                                        or (
+                                            f"Conferma l'avvio del gioco Steam con App ID "
+                                            f"{args.get('app_id', '')}? "
+                                            "Risponda «Sì, confermo»."
                                         )
                                     )
                                 else:
@@ -1761,7 +1850,12 @@ class JarvisLive:
         else:
             args = dict(pending["args"])
             args["confirmed"] = True
-            if pending["name"] in {"computer_input", "agent_loop"}:
+            if pending["name"] in {
+                "computer_input",
+                "agent_loop",
+                "app_launcher",
+                "launch_steam_game",
+            }:
                 self._local_pending_confirmation = pending
             else:
                 self._local_pending_confirmation = None
@@ -1772,13 +1866,18 @@ class JarvisLive:
             )
             response = (
                 await self._execute_tool(tool_call, user_confirmed=True)
-                if pending["name"] in {"terminal_run", "agent_loop"}
+                if pending["name"] in {"terminal_run", "agent_loop", "launch_steam_game"}
                 else await self._execute_tool(tool_call)
             )
+            if (
+                pending["name"] in {"app_launcher", "launch_steam_game"}
+                and self._local_pending_confirmation is pending
+            ):
+                self._local_pending_confirmation = None
             response_result = response.response.get("result", "")
             assistant_text = (
                 json.dumps(response.response, ensure_ascii=False, default=str)
-                if pending["name"] == "terminal_run"
+                if pending["name"] in {"terminal_run", "launch_steam_game"}
                 else str(response_result)
             )
         self._local_messages.append({"role": "assistant", "content": assistant_text})
@@ -2020,13 +2119,156 @@ class JarvisLive:
         print(f"[JARVIS] 🔧 {name}  {logged_args}")
         self.ui.set_state("THINKING")
 
-        decision = route_tool(name, args, self._last_user_text)
+        if name == "app_launcher" and re.search(
+            r"\b(?:avvia|lancia|start|launch|open|apri)\b.+\b(?:su|on)\s+steam\b",
+            self._last_user_text,
+            re.I,
+        ):
+            requested_app = _canonical_app_name(
+                str(args.get("name") or args.get("app_name") or "")
+            )
+            if requested_app not in {"steam", "epicgameslauncher"}:
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={
+                        "result": (
+                            "Non risolvo giochi dal nome. Fornisca lo Steam App ID "
+                            "oppure chieda di aprire Steam per cercarlo manualmente."
+                        )
+                    },
+                )
+
+        requested_app = _canonical_app_name(
+            str(args.get("name") or args.get("app_name") or "")
+        )
+        explicit_launcher_open = bool(
+            name == "app_launcher"
+            and requested_app in {"steam", "epicgameslauncher"}
+            and self._is_explicit_app_launch(self._last_user_text, args)
+        )
+        decision = (
+            None
+            if explicit_launcher_open
+            else route_tool(name, args, self._last_user_text)
+        )
         if decision and decision.blocked:
             return types.FunctionResponse(
                 id=fc.id,
                 name=name,
                 response={"result": decision.clarification, "blocked": True},
             )
+
+        if name == "app_launcher":
+            pending = getattr(self, "_local_pending_confirmation", None)
+            requested_name = args.get("name") or args.get("app_name")
+            pending_name = (
+                pending.get("args", {}).get("name")
+                or pending.get("args", {}).get("app_name")
+                if pending and pending.get("name") == name
+                else None
+            )
+            matches_pending = bool(
+                isinstance(requested_name, str)
+                and isinstance(pending_name, str)
+                and _canonical_app_name(requested_name)
+                == _canonical_app_name(pending_name)
+            )
+            if self._is_explicit_app_launch(self._last_user_text, args):
+                args["confirmed"] = True
+                self._local_pending_confirmation = None
+            elif matches_pending and self._is_explicit_confirmation(
+                self._last_user_text
+            ):
+                args = dict(pending["args"])
+                args["confirmed"] = True
+                self._local_pending_confirmation = None
+            else:
+                args.pop("confirmed", None)
+                self._local_pending_confirmation = {
+                    "id": fc.id,
+                    "name": name,
+                    "args": {
+                        key: value
+                        for key, value in args.items()
+                        if key != "confirmed"
+                    },
+                }
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={
+                        "result": "Ask the user for explicit confirmation",
+                        "prompt": (
+                            f"Conferma l'apertura di {requested_name or 'questa app'}? "
+                            "Risponda «Sì, confermo»."
+                        ),
+                    },
+                )
+
+        if name == "launch_steam_game":
+            app_id = str(args.get("app_id", "")).strip()
+            if not re.fullmatch(r"[1-9][0-9]{0,9}", app_id):
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={"result": "Invalid Steam App ID; no game was launched."},
+                )
+            pending = getattr(self, "_local_pending_confirmation", None)
+            if user_confirmed:
+                if (
+                    not pending
+                    or pending.get("name") != name
+                    or str(pending.get("args", {}).get("app_id", "")) != app_id
+                ):
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={
+                            "result": (
+                                "No matching confirmation is pending; "
+                                "the game was not launched."
+                            )
+                        },
+                    )
+                args = dict(pending["args"])
+                args["confirmed"] = True
+                self._local_pending_confirmation = None
+            else:
+                request_ids = re.findall(
+                    r"\b[1-9][0-9]{0,9}\b",
+                    getattr(self, "_last_user_text", ""),
+                )
+                if app_id not in request_ids:
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={
+                            "result": (
+                                "Fornisca lo Steam App ID numerico del gioco, oppure "
+                                "chieda di aprire Steam per cercarlo manualmente. "
+                                "Non risolvo i giochi dal nome."
+                            )
+                        },
+                    )
+                args.pop("confirmed", None)
+                self._local_pending_confirmation = {
+                    "id": fc.id,
+                    "name": name,
+                    "args": {"app_id": app_id},
+                }
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={
+                        "result": "Ask the user for explicit confirmation",
+                        "app_id": app_id,
+                        "prompt": (
+                            f"Conferma l'avvio del gioco Steam con App ID {app_id}? "
+                            "Risponda «Sì, confermo»."
+                        ),
+                    },
+                )
 
         if name == "agent_loop":
             from core.agent_loop import resolve_max_steps
@@ -2539,8 +2781,43 @@ class JarvisLive:
                 result = r or "Done."
 
             elif name == "game_updater":
-                r = await loop.run_in_executor(None, lambda: game_updater(parameters=args, player=self.ui, speak=speak))
-                result = r or "Done."
+                user_text = getattr(self, "_last_user_text", "")
+                gameplay_request = re.search(
+                    r"\b(?:gioca|giocare|play)\s+(?:a\s+)?\w+",
+                    user_text,
+                    re.I,
+                )
+                launch_by_name = (
+                    str(args.get("action", "")).casefold() in {"open", "launch"}
+                    or (
+                        bool(args.get("game_name"))
+                        and re.search(
+                            r"\b(?:apri|avvia|lancia|start|launch|open)\b",
+                            user_text,
+                            re.I,
+                        )
+                    )
+                )
+                if gameplay_request:
+                    result = (
+                        "Posso avviare Steam o Epic e lanciare un gioco tramite App ID "
+                        "Steam dopo conferma, ma non posso controllarlo in-game: "
+                        "anti-cheat e fullscreen possono bloccare input e cattura."
+                    )
+                elif launch_by_name:
+                    result = (
+                        "Non posso risolvere in modo affidabile il nome del gioco. "
+                        "Fornisca il suo Steam App ID, oppure posso aprire Steam "
+                        "per cercarlo manualmente."
+                    )
+                else:
+                    r = await loop.run_in_executor(
+                        None,
+                        lambda: game_updater(
+                            parameters=args, player=self.ui, speak=speak
+                        ),
+                    )
+                    result = r or "Done."
 
             elif name == "system_status":
                 r = await loop.run_in_executor(None, get_system_status)

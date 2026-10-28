@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any
+from urllib.parse import urlsplit
 
 APP_LAUNCHER_ENV = "JARVIS_APP_LAUNCHER"
 ALLOWED_EXTENSIONS = frozenset({".exe", ".lnk", ".bat", ".msi"})
@@ -38,7 +39,26 @@ CACHE_PATH = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Jarvis" / "app_launcher_cache.json"
 _HELP_APPS = frozenset({"code", "git", "node", "npm", "python", "python3"})
-_APP_NAME_ALIASES = {"blocconote": "notepad"}
+_APP_NAME_ALIASES = {
+    "blocconote": "notepad",
+    "steam": "steam",
+    "epic": "epicgameslauncher",
+    "epicgames": "epicgameslauncher",
+    "epicgameslauncher": "epicgameslauncher",
+}
+_LAUNCHER_EXECUTABLES = {
+    "steam": (
+        Path(r"C:\Program Files (x86)\Steam\steam.exe"),
+        "steam.exe",
+    ),
+    "epicgameslauncher": (
+        Path(
+            r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries"
+            r"\Win64\EpicGamesLauncher.exe"
+        ),
+        "EpicGamesLauncher.exe",
+    ),
+}
 
 
 def enabled() -> bool:
@@ -307,6 +327,30 @@ def find_executable(name: str) -> Path | None:
     if requested is None:
         return None
 
+    launcher = _LAUNCHER_EXECUTABLES.get(_app_key(requested))
+    if launcher:
+        common_path, executable_name = launcher
+        candidate = _candidate_path(common_path)
+        if candidate is None:
+            program_files_x86 = os.environ.get(
+                "ProgramFiles(x86)", r"C:\Program Files (x86)"
+            )
+            candidate = _candidate_path(
+                Path(program_files_x86).joinpath(*common_path.parts[2:])
+            )
+        if candidate is not None:
+            _remember(requested, candidate)
+            return candidate
+        candidate = _find_in_registry(PureWindowsPath(executable_name).stem)
+        if candidate is not None:
+            _remember(requested, candidate)
+            return candidate
+        if requested == "steam":
+            candidate = _find_steam_registry_path()
+            if candidate is not None:
+                _remember(requested, candidate)
+                return candidate
+
     candidate = _find_on_path(requested)
     if candidate is not None:
         _remember(requested, candidate)
@@ -337,6 +381,19 @@ def find_executable(name: str) -> Path | None:
     if candidate is not None:
         return candidate
     return None
+
+
+def _find_steam_registry_path() -> Path | None:
+    try:
+        import winreg
+    except ImportError:
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as key:
+            value, _ = winreg.QueryValueEx(key, "SteamPath")
+    except OSError:
+        return None
+    return _candidate_path(Path(os.path.expandvars(str(value))) / "steam.exe")
 
 
 def list_known_apps() -> dict[str, str]:
@@ -552,6 +609,35 @@ def launch_app(
     except (OSError, subprocess.SubprocessError) as exc:
         _audit("launch_failed", requested, path, str(exc))
         return f"Failed to launch '{requested}': {exc}"
+
+
+def launch_uri(uri: str) -> str:
+    """Open only explicitly supported Steam and Epic launcher URI schemes."""
+    if not isinstance(uri, str) or not uri or any(ord(char) < 32 for char in uri):
+        raise ValueError("URI must be a non-empty string without control characters.")
+    parsed = urlsplit(uri)
+    if parsed.scheme.casefold() not in {"steam", "com.epicgames.launcher"}:
+        raise ValueError("Only Steam and Epic Games launcher URI schemes are allowed.")
+    if parsed.scheme.casefold() == "steam" and not parsed.netloc:
+        raise ValueError("Steam URI must include a command.")
+    if parsed.scheme.casefold() == "com.epicgames.launcher" and not parsed.netloc:
+        raise ValueError("Epic Games URI must include a command.")
+    startfile = getattr(os, "startfile", None)
+    if startfile is not None:
+        startfile(uri)
+    elif os.name == "nt":
+        if re.search(r'[\s"&|<>^%()]', uri):
+            raise ValueError("URI contains characters unsafe for the Windows fallback.")
+        subprocess.run(
+            ["cmd", "/c", "start", "", uri],
+            shell=False,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    else:
+        raise OSError("Launcher URI launching is supported only on Windows.")
+    return f"Opened launcher URI: {uri}"
 
 
 def app_launcher(parameters: dict | None = None, **_context: Any) -> str:
