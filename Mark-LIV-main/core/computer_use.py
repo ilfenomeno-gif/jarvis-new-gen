@@ -202,13 +202,19 @@ def screen_capture_metadata() -> dict[str, Any]:
 def ocr_screen(
     language: str = "eng",
     min_confidence: float = 45.0,
+    *,
+    image=None,
+    monitor: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     try:
         import pytesseract
         from pytesseract import Output
     except ImportError as exc:
         raise RuntimeError("Local OCR requires the existing pytesseract package.") from exc
-    image, monitor = capture_screen()
+    if image is None:
+        image, monitor = capture_screen()
+    elif monitor is None:
+        raise ValueError("monitor metadata is required when OCR uses a supplied frame.")
     try:
         data = pytesseract.image_to_data(
             image,
