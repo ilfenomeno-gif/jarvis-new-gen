@@ -406,6 +406,27 @@ def _is_console_executable(path: Path) -> bool:
         return False
 
 
+def _wait_for_launched_app(
+    requested: str, path: Path, launch_target: Path
+) -> str | None:
+    from core.computer_use import wait_for_foreground
+
+    try:
+        focused = wait_for_foreground(launch_target.name, timeout=3)
+    except RuntimeError as exc:
+        focused = False
+        detail = str(exc)
+    else:
+        detail = f"{launch_target.name} did not become the foreground process"
+    if focused:
+        return None
+    _audit("launch_failed", requested, path, detail)
+    return (
+        f"Could not continue with {requested}: its window did not become "
+        "foreground within 3 seconds."
+    )
+
+
 def launch_app(
     name: str, args: Any = None, *, confirmed: bool = False
 ) -> str:
@@ -476,6 +497,10 @@ def launch_app(
         ) and not arguments:
             os.startfile(str(path))
             _audit("launch_started", requested, path, f"target={launch_target}")
+            if not arguments and not _is_console_executable(launch_target):
+                focus_error = _wait_for_launched_app(requested, path, launch_target)
+                if focus_error:
+                    return focus_error
             return f"Launch requested for {requested}."
 
         if launch_target.suffix.casefold() == ".msi":
@@ -510,11 +535,19 @@ def launch_app(
                 path,
                 f"target={launch_target}; pid={process.pid}; still running after 5s",
             )
+            if not arguments and not _is_console_executable(launch_target):
+                focus_error = _wait_for_launched_app(requested, path, launch_target)
+                if focus_error:
+                    return focus_error
             return f"Launch started for {requested} (PID {process.pid})."
         if return_code != 0:
             _audit("launch_failed", requested, path, f"target={launch_target}; exit_code={return_code}")
             return f"'{requested}' exited with code {return_code}."
         _audit("launch_started", requested, path, f"target={launch_target}; pid={process.pid}")
+        if not arguments and not _is_console_executable(launch_target):
+            focus_error = _wait_for_launched_app(requested, path, launch_target)
+            if focus_error:
+                return focus_error
         return f"Launch completed for {requested} (PID {process.pid})."
     except (OSError, subprocess.SubprocessError) as exc:
         _audit("launch_failed", requested, path, str(exc))
