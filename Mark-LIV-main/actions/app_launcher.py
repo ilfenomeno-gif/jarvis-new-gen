@@ -422,7 +422,7 @@ def _wait_for_launched_app(
         return None
     _audit("launch_failed", requested, path, detail)
     return (
-        f"Launch requested for {requested}, but its window did not become "
+        f"Could not continue with {requested}: its window did not become "
         "foreground within 3 seconds."
     )
 

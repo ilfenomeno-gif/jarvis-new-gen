@@ -296,6 +296,29 @@ def test_confirmed_input_stops_after_three_foreground_failures(monkeypatch):
     assert len(attempts) == 3
 
 
+def test_type_text_action_is_supported(monkeypatch):
+    typed = []
+    pyautogui = ModuleType("pyautogui")
+    pyautogui.write = lambda character, interval: typed.append((character, interval))
+    monkeypatch.setitem(sys.modules, "pyautogui", pyautogui)
+    monkeypatch.setattr(computer_use, "_require_windows", lambda: None)
+    monkeypatch.setattr(computer_use, "arm_emergency_stop", lambda: None)
+    monkeypatch.setattr(computer_use, "_check_emergency_stop", lambda: None)
+    monkeypatch.setattr(
+        computer_use, "require_allowed_foreground", lambda: (13, "notepad.exe")
+    )
+    monkeypatch.setattr(computer_use.time, "sleep", lambda _seconds: None)
+
+    result = computer_use.execute_input({
+        "action": "type_text",
+        "text": "ciao",
+        "confirmed": True,
+    })
+
+    assert typed == [(character, 0) for character in "ciao"]
+    assert result == {"result": "Typed 4 characters.", "process": "notepad.exe"}
+
+
 def test_confirmed_input_refuses_when_emergency_stop_is_latched(monkeypatch):
     monkeypatch.setattr(computer_use, "_require_windows", lambda: None)
     monkeypatch.setattr(computer_use, "arm_emergency_stop", lambda: None)

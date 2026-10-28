@@ -243,6 +243,211 @@ def test_local_ambiguous_app_launch_still_requires_separate_confirmation():
     assert live.ui.logs[-1] == "JARVIS: Launch completed for Notepad."
 
 
+def test_local_compound_open_and_type_runs_with_one_explicit_request():
+    router = FakeRouter([[
+        {
+            "type": "tool_call",
+            "id": "call-input",
+            "name": "computer_input",
+            "args": {"action": "type", "text": "model-proposed text"},
+        },
+        {
+            "type": "tool_call",
+            "id": "call-app",
+            "name": "app_launcher",
+            "args": {"name": "Notepad"},
+        },
+        {"type": "done", "full_text": ""},
+    ], [
+        {"type": "content", "text": "Ho scritto ciao nel Blocco note."},
+        {"type": "done", "full_text": "Ho scritto ciao nel Blocco note."},
+    ]])
+    live = _live(router)
+    live._select_local_tool_declarations = lambda _text: [
+        {"name": "app_launcher", "risk_class": "destructive"},
+        {"name": "computer_input", "risk_class": "destructive"},
+    ]
+    executed = []
+
+    async def execute_tool(call):
+        executed.append((call.name, call.args.copy()))
+        if call.name == "app_launcher":
+            return SimpleNamespace(response={"result": "Launch completed for Notepad."})
+        return SimpleNamespace(response={"result": "Typed 4 characters."})
+
+    live._execute_tool = execute_tool
+    asyncio.run(live._handle_local_text("Apri blocco note e scrivi ciao"))
+
+    assert executed == [
+        ("app_launcher", {"name": "Notepad", "confirmed": True}),
+        (
+            "computer_input",
+            {"action": "type_text", "text": "ciao", "confirmed": True},
+        ),
+    ]
+    assert live._local_pending_confirmation is None
+
+
+def test_local_compound_typing_stops_if_the_app_does_not_get_focus():
+    router = FakeRouter([[
+        {
+            "type": "tool_call",
+            "id": "call-input",
+            "name": "computer_input",
+            "args": {"action": "type", "text": "ciao"},
+        },
+        {
+            "type": "tool_call",
+            "id": "call-app",
+            "name": "app_launcher",
+            "args": {"name": "Notepad"},
+        },
+        {"type": "done", "full_text": ""},
+    ]])
+    live = _live(router)
+    live._select_local_tool_declarations = lambda _text: [
+        {"name": "app_launcher", "risk_class": "destructive"},
+        {"name": "computer_input", "risk_class": "destructive"},
+    ]
+    executed = []
+
+    async def execute_tool(call):
+        executed.append((call.name, call.args.copy()))
+        return SimpleNamespace(response={
+            "result": (
+                "Could not continue with Notepad: its window did not become "
+                "foreground within 3 seconds."
+            )
+        })
+
+    live._execute_tool = execute_tool
+    asyncio.run(live._handle_local_text("Apri blocco note e scrivi ciao"))
+
+    assert executed == [("app_launcher", {"name": "Notepad", "confirmed": True})]
+    assert live._local_pending_confirmation is None
+
+
+def test_local_write_into_named_app_runs_without_a_confirmation_round():
+    router = FakeRouter([[
+        {
+            "type": "tool_call",
+            "id": "call-input",
+            "name": "computer_input",
+            "args": {"action": "type", "text": "model-proposed text"},
+        },
+        {"type": "done", "full_text": ""},
+    ], [
+        {"type": "content", "text": "Ho scritto ciao nel Blocco note."},
+        {"type": "done", "full_text": "Ho scritto ciao nel Blocco note."},
+    ]])
+    live = _live(router)
+    live._select_local_tool_declarations = lambda _text: [{
+        "name": "computer_input",
+        "risk_class": "destructive",
+    }]
+    executed = []
+
+    async def execute_tool(call):
+        executed.append((call.name, call.args.copy()))
+        return SimpleNamespace(response={"result": "Typed 4 characters."})
+
+    live._execute_tool = execute_tool
+    asyncio.run(live._handle_local_text("Scrivi ciao in blocco note"))
+
+    assert executed == [
+        (
+            "computer_input",
+            {"action": "type_text", "text": "ciao", "confirmed": True},
+        )
+    ]
+    assert live._local_pending_confirmation is None
+
+
+def test_execute_tool_accepts_only_the_explicit_named_app_text_input(monkeypatch):
+    import main
+    from core import computer_use
+
+    live = _live(FakeRouter([]))
+    live._last_user_text = "Scrivi ciao in blocco note"
+    executed = []
+
+    class ActionRegistry:
+        def has(self, name):
+            return name == "computer_input"
+
+        def run(self, name, args, ctx=None):
+            executed.append((name, args.copy()))
+            return {"result": "Typed 4 characters.", "process": "notepad.exe"}
+
+    live._action_registry = ActionRegistry()
+    monkeypatch.setattr(main, "require_policy_file", lambda: None)
+    monkeypatch.setattr(main, "route_tool", lambda *_args: None)
+    monkeypatch.setattr(computer_use, "arm_emergency_stop", lambda: None)
+    monkeypatch.setattr(
+        computer_use,
+        "require_allowed_foreground",
+        lambda: (17, "notepad.exe"),
+    )
+
+    result = asyncio.run(live._execute_tool(SimpleNamespace(
+        id="call-input",
+        name="computer_input",
+        args={"action": "type", "text": "model-proposed text"},
+    )))
+
+    assert result.response["result"] == {
+        "result": "Typed 4 characters.",
+        "process": "notepad.exe",
+    }
+    assert executed == [(
+        "computer_input",
+        {
+            "action": "type_text",
+            "text": "ciao",
+            "confirmed": True,
+            "_expected_window": 17,
+            "_expected_process": "notepad.exe",
+        },
+    )]
+    assert live._local_pending_confirmation is None
+
+
+def test_local_unscoped_or_incomplete_type_requests_are_not_auto_confirmed():
+    for text in ("Scrivi qualcosa", "Apri blocco note e scrivi"):
+        router = FakeRouter([[
+            {
+                "type": "tool_call",
+                "id": "call-input",
+                "name": "computer_input",
+                "args": {"action": "type", "text": "suggested text"},
+            },
+            {"type": "done", "full_text": ""},
+        ]])
+        live = _live(router)
+        live._select_local_tool_declarations = lambda _text: [{
+            "name": "computer_input",
+            "risk_class": "destructive",
+        }]
+        executed = []
+
+        async def execute_tool(call):
+            executed.append((call.name, call.args.copy()))
+            return SimpleNamespace(response={
+                "result": (
+                    "Ask the user for explicit confirmation before typing."
+                )
+            })
+
+        live._execute_tool = execute_tool
+        asyncio.run(live._handle_local_text(text))
+
+        assert executed == [
+            ("computer_input", {"action": "type", "text": "suggested text"})
+        ]
+        assert live._local_pending_confirmation is not None
+        assert live._local_pending_confirmation["name"] == "computer_input"
+
+
 def test_local_terminal_command_runs_only_after_separate_confirmation():
     router = FakeRouter([[
         {
