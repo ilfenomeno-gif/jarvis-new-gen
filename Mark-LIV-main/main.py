@@ -1386,8 +1386,8 @@ class JarvisLive:
     @staticmethod
     def _is_explicit_confirmation(text: str) -> bool:
         return bool(re.fullmatch(
-            r"(?:s[iì](?:\s*,?\s*confermo(?:\s+.+)?)?|"
-            r"confermo(?:\s+.+)?|procedi(?:\s+.+)?|approvo(?:\s+.+)?|"
+            r"(?:s[iì](?:\s*,?\s*(?:confermo|procedo)(?:\s+.+)?)?|"
+            r"confermo(?:\s+.+)?|procedi(?:\s+.+)?|procedo(?:\s+.+)?|approvo(?:\s+.+)?|"
             r"yes(?:\s*,?\s*i confirm)?|confirm|go ahead)[.!]?",
             text.strip().lower(),
         ))
@@ -1419,9 +1419,11 @@ class JarvisLive:
                             "A direct request to open a recognized app is itself explicit "
                             "confirmation; indirect or ambiguous requests still require a "
                             "separate confirmation. Every terminal command requires a separate "
-                            "explicit user confirmation before execution. Every Computer Use "
-                            "mouse or keyboard input requires a separate explicit confirmation; "
-                            "perform one input action only and never chain actions."
+                            "explicit user confirmation before execution. Direct Computer Use "
+                            "mouse or keyboard input requires separate confirmation per action. "
+                            "The bounded agent loop instead requires session approval bound to "
+                            "the exact goal and action limit; its screen images are sent to "
+                            "Gemini cloud."
                         ),
                     })
                 self._local_messages.append({"role": "user", "content": text})
@@ -1487,8 +1489,13 @@ class JarvisLive:
                             "app_launcher",
                             "terminal_run",
                             "computer_input",
+                            "agent_loop",
                         }:
-                            args = {key: value for key, value in args.items() if key != "confirmed"}
+                            args = {
+                                key: value
+                                for key, value in args.items()
+                                if key != "confirmed"
+                            }
                             if name == "app_launcher" and self._is_explicit_app_launch(text, args):
                                 args["confirmed"] = True
 
@@ -1535,11 +1542,17 @@ class JarvisLive:
                             if (
                                 "Ask the user for explicit confirmation" in result_text
                             ):
-                                self._local_pending_confirmation = {
-                                    "id": call_id,
-                                    "name": name,
-                                    "args": args,
-                                }
+                                existing_pending = self._local_pending_confirmation
+                                if not (
+                                    existing_pending
+                                    and existing_pending.get("id") == call_id
+                                    and existing_pending.get("name") == name
+                                ):
+                                    self._local_pending_confirmation = {
+                                        "id": call_id,
+                                        "name": name,
+                                        "args": args,
+                                    }
                                 if name == "terminal_run":
                                     assistant_text = (
                                         "Signore, eseguire questo comando? "
@@ -1554,6 +1567,18 @@ class JarvisLive:
                                         "Signore, autorizza questa singola azione di input "
                                         f"nella finestra attiva: {action_description}? "
                                         "Risponda «Sì, confermo» per procedere."
+                                    )
+                                elif name == "agent_loop":
+                                    assistant_text = str(
+                                        tool_result.get("prompt")
+                                        or (
+                                            f"Obiettivo: {args.get('goal', '')}. "
+                                            f"Procedo con un massimo di "
+                                            f"{args.get('max_steps', 10)} azioni? "
+                                            "Ctrl+Alt+Esc interrompe. Le immagini dello "
+                                            "schermo saranno inviate a Gemini cloud. "
+                                            "Risponda «Sì, procedo»."
+                                        )
                                     )
                                 else:
                                     target = args.get("name") or args.get("app_name") or name
@@ -1631,7 +1656,7 @@ class JarvisLive:
         else:
             args = dict(pending["args"])
             args["confirmed"] = True
-            if pending["name"] == "computer_input":
+            if pending["name"] in {"computer_input", "agent_loop"}:
                 self._local_pending_confirmation = pending
             else:
                 self._local_pending_confirmation = None
@@ -1642,7 +1667,7 @@ class JarvisLive:
             )
             response = (
                 await self._execute_tool(tool_call, user_confirmed=True)
-                if pending["name"] == "terminal_run"
+                if pending["name"] in {"terminal_run", "agent_loop"}
                 else await self._execute_tool(tool_call)
             )
             response_result = response.response.get("result", "")
@@ -1885,6 +1910,8 @@ class JarvisLive:
             logged_args["url"] = "[URL REDACTED]"
         if name == "computer_input" and "text" in logged_args:
             logged_args["text"] = "[REDACTED]"
+        if name == "agent_loop" and "goal" in logged_args:
+            logged_args["goal"] = "[GOAL REDACTED]"
         print(f"[JARVIS] 🔧 {name}  {logged_args}")
         self.ui.set_state("THINKING")
 
@@ -1895,6 +1922,122 @@ class JarvisLive:
                 name=name,
                 response={"result": decision.clarification, "blocked": True},
             )
+
+        if name == "agent_loop":
+            from core.agent_loop import resolve_max_steps
+            from core.computer_use import (
+                arm_emergency_stop,
+                emergency_stop_triggered,
+                require_allowed_foreground,
+            )
+
+            goal = args.get("goal")
+            if not isinstance(goal, str) or not goal.strip():
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={"result": "failed", "reason": "A non-empty goal is required."},
+                )
+            try:
+                max_steps = resolve_max_steps(args.get("max_steps"))
+            except (TypeError, ValueError) as exc:
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={"result": "failed", "reason": str(exc)},
+                )
+            requested_args = {"goal": goal.strip(), "max_steps": max_steps}
+            pending = getattr(self, "_local_pending_confirmation", None)
+            explicit_confirmation = self._is_explicit_confirmation(
+                getattr(self, "_last_user_text", "")
+            )
+            matches_pending = bool(
+                pending
+                and pending.get("name") == name
+                and pending.get("args") == requested_args
+            )
+            if matches_pending and (user_confirmed or explicit_confirmation):
+                try:
+                    if emergency_stop_triggered():
+                        raise RuntimeError("Computer Use was stopped by Ctrl+Alt+Esc.")
+                    current_window, current_process = require_allowed_foreground()
+                except Exception as exc:
+                    self._local_pending_confirmation = None
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={"result": "cancelled", "reason": str(exc)},
+                    )
+                if (
+                    current_window != pending.get("window_handle")
+                    or current_process != pending.get("process_name")
+                ):
+                    self._local_pending_confirmation = None
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={
+                            "result": "cancelled",
+                            "reason": "The foreground window changed after approval.",
+                        },
+                    )
+                args = {
+                    **requested_args,
+                    "_session_approved": True,
+                }
+                self._local_pending_confirmation = None
+            else:
+                if (
+                    pending
+                    and pending.get("name") == name
+                    and explicit_confirmation
+                    and not matches_pending
+                ):
+                    self._local_pending_confirmation = None
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={
+                            "result": "cancelled",
+                            "reason": (
+                                "The goal or action limit changed after approval; "
+                                "a new session confirmation is required."
+                            ),
+                        },
+                    )
+                try:
+                    arm_emergency_stop()
+                    if emergency_stop_triggered():
+                        raise RuntimeError("Computer Use was stopped by Ctrl+Alt+Esc.")
+                    window_handle, process_name = require_allowed_foreground()
+                except Exception as exc:
+                    self._local_pending_confirmation = None
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={"result": "failed", "reason": f"Input disabled: {exc}"},
+                    )
+                prompt = (
+                    f"Obiettivo: {requested_args['goal']}. Procedo con un massimo di "
+                    f"{max_steps} azioni? Ctrl+Alt+Esc interrompe. Le immagini dello "
+                    "schermo saranno inviate a Gemini cloud per pianificare le azioni. "
+                    "Risponda «Sì, procedo»."
+                )
+                self._local_pending_confirmation = {
+                    "id": fc.id,
+                    "name": name,
+                    "args": requested_args,
+                    "window_handle": window_handle,
+                    "process_name": process_name,
+                }
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={
+                        "result": "Ask the user for explicit confirmation",
+                        "prompt": prompt,
+                    },
+                )
 
         if name == "terminal_run":
             pending = getattr(self, "_local_pending_confirmation", None)
@@ -2602,7 +2745,7 @@ class JarvisLive:
                                 if (
                                     pending_confirmation
                                     and pending_confirmation.get("name")
-                                    in {"terminal_run", "computer_input"}
+                                    in {"terminal_run", "computer_input", "agent_loop"}
                                     and getattr(
                                         getattr(self, "_brain_router", None),
                                         "backend",

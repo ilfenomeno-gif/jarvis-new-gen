@@ -193,3 +193,329 @@ def test_environment_max_steps_is_a_hard_cap(monkeypatch):
     with pytest.raises(ValueError, match="between 1 and"):
         monkeypatch.setenv("JARVIS_AGENT_MAX_STEPS", "0")
         resolve_max_steps()
+
+
+def test_agent_loop_action_is_registered_as_a_write_tool():
+    from pathlib import Path
+
+    from core.action_loader import discover_actions
+
+    registry = discover_actions(
+        Path(__file__).resolve().parents[1] / "actions",
+        logger=lambda _message: None,
+    )
+    declarations = {
+        declaration["name"]: declaration
+        for declaration in registry.get_tool_declarations()
+    }
+
+    assert registry.risk_class("agent_loop") == "write"
+    assert "agent_loop" in declarations
+    assert {"goal", "max_steps"} <= set(
+        declarations["agent_loop"]["parameters"]["properties"]
+    )
+
+
+def test_foreground_change_before_action_stops_without_input(tmp_path):
+    current = {"foreground": FOREGROUND}
+
+    def planner(*_args):
+        current["foreground"] = (456, "chrome.exe")
+        return {"action": "click", "target": {"x": 20, "y": 30}}
+
+    loop, executed, _prompts, _captures = _loop(
+        tmp_path,
+        [],
+        foreground=lambda: current["foreground"],
+    )
+    loop._planner = planner
+
+    result = asyncio.run(loop.run("Click the button"))
+
+    assert result["result"] == "failed"
+    assert "foreground window changed" in result["reason"]
+    assert not executed
+
+
+def test_kill_switch_during_loop_prevents_the_next_action(tmp_path):
+    state = {"stopped": False}
+    action = {"action": "type", "target": "focused field", "value": "one"}
+
+    def wait_for_change(**_kwargs):
+        state["stopped"] = True
+        return {"changed": True}
+
+    loop, executed, _prompts, _captures = _loop(
+        tmp_path,
+        [action, action],
+        max_steps=2,
+        wait_results=[{"changed": True}],
+        kill_switch=lambda: state["stopped"],
+    )
+    loop._wait_for_change = wait_for_change
+
+    result = asyncio.run(loop.run("Type text twice"))
+
+    assert result["result"] == "killed"
+    assert len(executed) == 1
+
+
+@pytest.mark.parametrize(
+    "changed_args",
+    [
+        {"goal": "Submit the form", "max_steps": 3},
+        {"goal": "Fill the form", "max_steps": 4},
+    ],
+)
+def test_session_approval_is_bound_to_goal_and_max_steps(monkeypatch, changed_args):
+    import main
+    from types import SimpleNamespace
+
+    from core import computer_use
+    from main import JarvisLive
+
+    class FakeUI:
+        muted = False
+
+        def set_state(self, _state):
+            pass
+
+        def write_log(self, _text):
+            pass
+
+    class ActionRegistry:
+        def __init__(self):
+            self.calls = []
+
+        def has(self, name):
+            return name == "agent_loop"
+
+        def run(self, name, args, ctx=None):
+            self.calls.append((name, args.copy()))
+            return '{"result":"success"}'
+
+    live = JarvisLive.__new__(JarvisLive)
+    live.ui = FakeUI()
+    live._brain_router = SimpleNamespace(backend="local")
+    live._asst_name = "JARVIS"
+    live._last_user_text = "Automatizza e completa l'obiettivo"
+    live._local_pending_confirmation = None
+    live._action_registry = ActionRegistry()
+    monkeypatch.setattr(main, "require_policy_file", lambda: None)
+    monkeypatch.setattr(computer_use, "arm_emergency_stop", lambda: None)
+    monkeypatch.setattr(computer_use, "emergency_stop_triggered", lambda: False)
+    monkeypatch.setattr(
+        computer_use,
+        "require_allowed_foreground",
+        lambda: (17, "notepad.exe"),
+    )
+
+    async def execute(call, user_confirmed=False):
+        return await live._execute_tool(call, user_confirmed=user_confirmed)
+
+    first = asyncio.run(execute(SimpleNamespace(
+        id="agent-call-1",
+        name="agent_loop",
+        args={
+            "goal": "Fill the form",
+            "max_steps": 3,
+            "confirmed": True,
+            "_session_approved": True,
+        },
+    )))
+    assert first.response["result"] == "Ask the user for explicit confirmation"
+    assert "massimo di 3 azioni" in first.response["prompt"]
+    assert live._local_pending_confirmation == {
+        "id": "agent-call-1",
+        "name": "agent_loop",
+        "args": {"goal": "Fill the form", "max_steps": 3},
+        "window_handle": 17,
+        "process_name": "notepad.exe",
+    }
+    assert live._action_registry.calls == []
+
+    live._last_user_text = "Sì, procedo"
+    changed = asyncio.run(execute(SimpleNamespace(
+        id="agent-call-2",
+        name="agent_loop",
+        args=changed_args,
+    )))
+    assert changed.response["result"] == "cancelled"
+    assert "new session confirmation" in changed.response["reason"]
+    assert live._local_pending_confirmation is None
+    assert live._action_registry.calls == []
+
+
+def test_session_approval_executes_only_the_bound_agent_request(monkeypatch):
+    import main
+    from types import SimpleNamespace
+
+    from core import computer_use
+    from main import JarvisLive
+
+    class FakeUI:
+        muted = False
+
+        def set_state(self, _state):
+            pass
+
+        def write_log(self, _text):
+            pass
+
+    class ActionRegistry:
+        def __init__(self):
+            self.calls = []
+
+        def has(self, name):
+            return name == "agent_loop"
+
+        def run(self, name, args, ctx=None):
+            self.calls.append((name, args.copy()))
+            return '{"result":"success"}'
+
+    live = JarvisLive.__new__(JarvisLive)
+    live.ui = FakeUI()
+    live._brain_router = SimpleNamespace(backend="local")
+    live._asst_name = "JARVIS"
+    live._last_user_text = "Automatizza questo obiettivo"
+    live._local_pending_confirmation = None
+    live._action_registry = ActionRegistry()
+    monkeypatch.setattr(main, "require_policy_file", lambda: None)
+    monkeypatch.setattr(computer_use, "arm_emergency_stop", lambda: None)
+    monkeypatch.setattr(computer_use, "emergency_stop_triggered", lambda: False)
+    monkeypatch.setattr(
+        computer_use,
+        "require_allowed_foreground",
+        lambda: (17, "notepad.exe"),
+    )
+
+    async def execute(call, user_confirmed=False):
+        return await live._execute_tool(call, user_confirmed=user_confirmed)
+
+    request = {"goal": "Fill the form", "max_steps": 3}
+    asyncio.run(execute(SimpleNamespace(
+        id="agent-call-1",
+        name="agent_loop",
+        args=request,
+    )))
+    live._last_user_text = "Sì, procedo"
+    result = asyncio.run(execute(SimpleNamespace(
+        id="agent-call-2",
+        name="agent_loop",
+        args={**request, "confirmed": True},
+    )))
+
+    assert result.response == {"result": '{"result":"success"}'}
+    assert live._action_registry.calls == [
+        (
+            "agent_loop",
+            {
+                "goal": "Fill the form",
+                "max_steps": 3,
+                "_session_approved": True,
+            },
+        )
+    ]
+    assert live._local_pending_confirmation is None
+
+
+def test_local_confirmation_preserves_focus_binding_and_runs_agent_once(monkeypatch):
+    import main
+    from types import SimpleNamespace
+
+    from core import computer_use
+    from main import JarvisLive
+
+    class FakeUI:
+        muted = False
+
+        def __init__(self):
+            self.logs = []
+
+        def set_state(self, _state):
+            pass
+
+        def write_log(self, text):
+            self.logs.append(text)
+
+    class FakeRouter:
+        backend = "local"
+
+        def stream_chat(self, _messages, tools=None):
+            return iter([
+                {
+                    "type": "tool_call",
+                    "id": "agent-local-call",
+                    "name": "agent_loop",
+                    "args": {"goal": "Fill the form", "max_steps": 2},
+                },
+                {"type": "done"},
+            ])
+
+    class ActionRegistry:
+        def __init__(self):
+            self.calls = []
+
+        def has(self, name):
+            return name == "agent_loop"
+
+        def run(self, name, args, ctx=None):
+            self.calls.append((name, args.copy()))
+            return '{"result":"success"}'
+
+    live = JarvisLive.__new__(JarvisLive)
+    live.ui = FakeUI()
+    live._brain_router = FakeRouter()
+    live._asst_name = "JARVIS"
+    live._local_messages = [{"role": "system", "content": "test"}]
+    live._local_chat_lock = asyncio.Lock()
+    live._local_pending_confirmation = None
+    live._computer_input_confirmation_available = False
+    live._session_log = []
+    live._action_registry = ActionRegistry()
+    live._select_local_tool_declarations = lambda _text: [{
+        "name": "agent_loop",
+        "risk_class": "write",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "goal": {"type": "STRING"},
+                "max_steps": {"type": "INTEGER"},
+            },
+            "required": ["goal"],
+        },
+    }]
+    monkeypatch.setattr(main, "require_policy_file", lambda: None)
+    monkeypatch.setattr(computer_use, "arm_emergency_stop", lambda: None)
+    monkeypatch.setattr(computer_use, "emergency_stop_triggered", lambda: False)
+    monkeypatch.setattr(
+        computer_use,
+        "require_allowed_foreground",
+        lambda: (17, "notepad.exe"),
+    )
+
+    asyncio.run(live._handle_local_text("Automatizza questo obiettivo"))
+
+    assert live._local_pending_confirmation == {
+        "id": "agent-local-call",
+        "name": "agent_loop",
+        "args": {"goal": "Fill the form", "max_steps": 2},
+        "window_handle": 17,
+        "process_name": "notepad.exe",
+    }
+    assert not live._action_registry.calls
+
+    asyncio.run(live._handle_local_text("Sì, procedo"))
+
+    assert live._local_pending_confirmation is None
+    assert live._action_registry.calls == [
+        (
+            "agent_loop",
+            {
+                "goal": "Fill the form",
+                "max_steps": 2,
+                "_session_approved": True,
+            },
+        )
+    ]
+    assert any("success" in line for line in live.ui.logs)
