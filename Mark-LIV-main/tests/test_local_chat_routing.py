@@ -158,7 +158,45 @@ def test_local_state_changing_tool_is_not_repeated_in_one_request():
     ]
 
 
-def test_local_app_launch_requires_confirmation_from_a_separate_user_message():
+def test_local_explicit_app_launch_does_not_require_redundant_confirmation():
+    router = FakeRouter([[
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "name": "app_launcher",
+            "args": {"name": "Notepad", "confirmed": True},
+        },
+        {"type": "done", "full_text": ""},
+    ], [
+        {"type": "content", "text": "Notepad aperto."},
+        {"type": "done", "full_text": "Notepad aperto."},
+    ]])
+    live = _live(router)
+    live._select_local_tool_declarations = lambda _text: [{
+        "name": "app_launcher",
+        "risk_class": "destructive",
+    }]
+    executed = []
+
+    async def execute_tool(call):
+        executed.append((call.name, call.args.copy()))
+        if call.args.get("confirmed") is True:
+            return SimpleNamespace(response={"result": "Launch completed for Notepad."})
+        return SimpleNamespace(response={
+            "result": (
+                "Action 'app_launcher' is destructive. Ask the user for explicit "
+                "confirmation, then call it again with confirmed=true."
+            )
+        })
+
+    live._execute_tool = execute_tool
+    asyncio.run(live._handle_local_text("Apri il blocco note"))
+    assert live._local_pending_confirmation is None
+    assert executed == [("app_launcher", {"name": "Notepad", "confirmed": True})]
+    assert live.ui.logs[-1] == "JARVIS: Notepad aperto."
+
+
+def test_local_ambiguous_app_launch_still_requires_separate_confirmation():
     router = FakeRouter([[
         {
             "type": "tool_call",
@@ -187,7 +225,7 @@ def test_local_app_launch_requires_confirmation_from_a_separate_user_message():
         })
 
     live._execute_tool = execute_tool
-    asyncio.run(live._handle_local_text("Apri il blocco note"))
+    asyncio.run(live._handle_local_text("Il blocco note sarebbe utile"))
     assert live._local_pending_confirmation == {
         "id": "call-1",
         "name": "app_launcher",

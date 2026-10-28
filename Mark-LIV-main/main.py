@@ -59,6 +59,7 @@ from memory.memory_manager import (
 
 from actions.file_processor import file_processor
 from actions.open_app          import open_app
+from actions.app_launcher      import _canonical_app_name
 from actions.computer_settings import computer_settings
 from actions.screen_processor  import _capture_camera, _capture_screen
 from actions.youtube_video     import youtube_video
@@ -1350,6 +1351,37 @@ class JarvisLive:
             logging.getLogger(__name__).exception("Local brain request failed")
             self.ui.write_log(f"ERR: Cervello locale non disponibile: {exc}")
 
+    @staticmethod
+    def _is_explicit_app_launch(text: str, args: dict) -> bool:
+        opening_verb = re.search(
+            r"\b(?:apri|aprimi|avvia|avvii|lancia|launch|open|start)\b",
+            text,
+            re.I,
+        )
+        app_name = args.get("name") or args.get("app_name")
+        if not opening_verb or not isinstance(app_name, str):
+            return False
+
+        requested_app = _canonical_app_name(app_name)
+        if requested_app is None:
+            return False
+        requested_words = re.findall(r"[\w.]+", requested_app.casefold())
+        tail = text[opening_verb.end():]
+        tail = re.sub(
+            r"^\s*(?:(?:il|lo|la|i|gli|le|un|uno|una|the|a|an)\s+)+",
+            "",
+            tail,
+            flags=re.I,
+        )
+        words = re.findall(r"[\w.]+", tail.casefold())
+        max_window = max(2, len(requested_words))
+        for size in range(1, max_window + 1):
+            for start in range(len(words) - size + 1):
+                candidate = _canonical_app_name(" ".join(words[start:start + size]))
+                if candidate and candidate.casefold() == requested_app.casefold():
+                    return True
+        return False
+
     async def _handle_local_text(self, text: str) -> None:
         async with self._local_chat_lock:
             self.ui.set_state("THINKING")
@@ -1367,7 +1399,10 @@ class JarvisLive:
                             "without tools. Use only a tool provided for the current request; "
                             "never call unrelated tools, create notes, or save memory unless "
                             "the user explicitly asks. Never repeat a state-changing tool call. "
-                            "A desktop app launch requires a separate explicit user confirmation."
+                            "A desktop app launch requires a separate explicit user confirmation. "
+                            "A direct request to open a recognized app is itself explicit "
+                            "confirmation; indirect or ambiguous requests still require a "
+                            "separate confirmation."
                         ),
                     })
                 self._local_messages.append({"role": "user", "content": text})
@@ -1431,6 +1466,8 @@ class JarvisLive:
                         risk_class = declaration.get("risk_class", "read")
                         if risk_class == "destructive" or name == "app_launcher":
                             args = {key: value for key, value in args.items() if key != "confirmed"}
+                            if name == "app_launcher" and self._is_explicit_app_launch(text, args):
+                                args["confirmed"] = True
 
                         should_stop = False
                         pending_confirmation = False
