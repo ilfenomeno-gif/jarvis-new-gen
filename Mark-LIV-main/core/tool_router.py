@@ -78,6 +78,8 @@ GROUPS: tuple[Group, ...] = (
     _group("proxy", r"proxy|\bvpn\b", {"proxy_launcher"}),
     _group("applications", r"\b(apri|aprimi|avvia|avvii|lancia|launch|open|start)\b",
            {"app_launcher"}),
+    _group("terminal", r"\bterminal(?:e)?\b|\bcomando shell\b|\besegui (?:il )?comando\b|\brun (?:the )?command\b",
+           {"terminal_run"}),
     _group("games", r"gioc|\bgame|steam|\bepic\b", {"game_updater"}),
     _group("ui", r"pannell|panel|layout|focus|\bdock|workspace|nascondi|\bhide|mostra|\bshow|\blog\b|interfaccia|chiudi il|apri il",
            {"ui_layout"}),

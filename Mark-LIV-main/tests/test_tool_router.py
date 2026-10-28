@@ -38,6 +38,16 @@ def test_app_launcher_is_available_for_application_requests():
     )
 
 
+def test_terminal_run_is_selected_only_for_explicit_terminal_requests():
+    declarations = [decl("terminal_run"), decl("quick_notes")]
+    router = ToolRouter()
+
+    assert names(
+        router.select_for_request("Esegui il comando echo hello", declarations)
+    ) == {"terminal_run"}
+    assert router.select_for_request("Dimmi una curiosità", declarations) == []
+
+
 def test_local_selection_uses_only_tools_relevant_to_the_current_request():
     declarations = [
         decl("app_launcher"),
