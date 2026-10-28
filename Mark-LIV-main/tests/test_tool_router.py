@@ -25,7 +25,7 @@ SAMPLE = [decl(n) for n in (
 
 
 def test_vague_request_gets_always_and_base_only():
-    out = names(ToolRouter().select("fai qualcosa di utile", SAMPLE))
+    out = names(ToolRouter().select("dimmi qualcosa di utile", SAMPLE))
     assert out >= ALWAYS | BASE
     assert "weather_report" not in out and "gev_mcp_get_earthquakes" not in out and "generate_3d_model" not in out
 
@@ -39,12 +39,18 @@ def test_app_launcher_is_available_for_application_requests():
 
 
 def test_terminal_run_is_selected_only_for_explicit_terminal_requests():
-    declarations = [decl("terminal_run"), decl("quick_notes")]
+    declarations = [decl("terminal_run"), decl("agent_loop"), decl("quick_notes")]
     router = ToolRouter()
 
     assert names(
         router.select_for_request("Esegui il comando echo hello", declarations)
     ) == {"terminal_run"}
+    assert names(router.select("Esegui il comando echo hello", declarations)) >= {
+        "terminal_run"
+    }
+    assert "agent_loop" not in names(
+        router.select_for_request("Esegui il comando echo hello", declarations)
+    )
     assert router.select_for_request("Dimmi una curiosità", declarations) == []
 
 
@@ -58,6 +64,16 @@ def test_computer_use_tools_are_selected_for_perception_and_input_requests():
     assert names(
         router.select_for_request("Clicca sul pulsante in Notepad", declarations)
     ) == {"computer_input"}
+    assert router.select_for_request("Dimmi una curiosità", declarations) == []
+
+
+def test_agent_loop_is_selected_for_explicit_multi_step_requests():
+    declarations = [decl("agent_loop"), decl("terminal_run")]
+    router = ToolRouter()
+
+    assert names(router.select_for_request("Automatizza questo obiettivo", declarations)) == {
+        "agent_loop"
+    }
     assert router.select_for_request("Dimmi una curiosità", declarations) == []
 
 

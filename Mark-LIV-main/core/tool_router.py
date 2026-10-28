@@ -82,6 +82,8 @@ GROUPS: tuple[Group, ...] = (
            {"app_launcher"}),
     _group("terminal", r"\bterminal(?:e)?\b|\bcomando shell\b|\besegui (?:il )?comando\b|\brun (?:the )?command\b",
            {"terminal_run"}),
+    _group("agent", r"\b(?:fai|compila|esegui|automatizza|agent|loop|obiettivo)\b",
+           {"agent_loop"}),
     _group("games", r"gioc|\bgame|steam|\bepic\b", {"game_updater"}),
     _group("ui", r"pannell|panel|layout|focus|\bdock|workspace|nascondi|\bhide|mostra|\bshow|\blog\b|interfaccia|chiudi il|apri il",
            {"ui_layout"}),
@@ -101,11 +103,28 @@ class ToolRouter:
         return any(name in g.tools or name.startswith(g.prefixes) for g in self._groups if g.prefixes or g.tools)
 
     def matched_groups(self, text: str) -> list[str]:
-        return [g.name for g in self._groups if g.pattern.search(text or "")]
+        return [g.name for g in self._matched_groups(text or "")]
+
+    def _matched_groups(self, text: str) -> list[Group]:
+        hits = [group for group in self._groups if group.pattern.search(text)]
+        terminal_request = re.search(
+            r"\bterminal(?:e)?\b|\bcomando shell\b|"
+            r"\besegui (?:il )?comando\b|\brun (?:the )?command\b",
+            text,
+            re.IGNORECASE,
+        )
+        explicit_agent_request = re.search(
+            r"\b(?:fai|compila|automatizza|agent|loop|obiettivo)\b",
+            text,
+            re.IGNORECASE,
+        )
+        if terminal_request and not explicit_agent_request:
+            hits = [group for group in hits if group.name != "agent"]
+        return hits
 
     def select(self, text: str, declarations: list[dict], used: Iterable[str] = ()) -> list[dict]:
         names = set(self._always) | set(used)
-        hits = [g for g in self._groups if g.pattern.search(text or "")]
+        hits = self._matched_groups(text or "")
         if not hits:
             names |= self._base
         keep_all_prefixes: list[str] = []
@@ -133,11 +152,11 @@ class ToolRouter:
             routing_text = re.sub(r"\b(?:blocco note|notepad)\b", " ", routing_text, flags=re.I)
             hits = [
                 group
-                for group in self._groups
+                for group in self._matched_groups(routing_text)
                 if group.name != "ui" and group.pattern.search(routing_text)
             ]
         else:
-            hits = [group for group in self._groups if group.pattern.search(routing_text)]
+            hits = self._matched_groups(routing_text)
         if not hits:
             return []
 
