@@ -380,6 +380,30 @@ def test_input_allowlist_denies_unapproved_foreground_process(monkeypatch):
         computer_use.require_allowed_foreground()
 
 
+def test_launcher_processes_are_allowed_but_game_processes_are_not(monkeypatch):
+    allowed = computer_use.allowed_processes({})
+    assert {
+        "steam.exe",
+        "steamwebhelper.exe",
+        "epicgameslauncher.exe",
+        "epicwebhelper.exe",
+    } <= allowed
+    assert "cyberpunk2077.exe" not in allowed
+
+    monkeypatch.setattr(computer_use, "_require_windows", lambda: None)
+    monkeypatch.setattr(
+        computer_use, "foreground_process", lambda: (13, "steam.exe")
+    )
+    monkeypatch.setattr(computer_use, "allowed_processes", lambda: allowed)
+    assert computer_use.require_allowed_foreground() == (13, "steam.exe")
+
+    monkeypatch.setattr(
+        computer_use, "foreground_process", lambda: (13, "Cyberpunk2077.exe")
+    )
+    with pytest.raises(PermissionError, match="Input blocked for Cyberpunk2077.exe"):
+        computer_use.require_allowed_foreground()
+
+
 def test_input_hotkeys_require_modifiers_and_supported_keys():
     assert computer_use._validated_hotkey("ctrl+shift+s") == ["ctrl", "shift", "s"]
     with pytest.raises(ValueError, match="modifier combination"):

@@ -38,6 +38,32 @@ def test_app_launcher_is_available_for_application_requests():
     )
 
 
+def test_game_launcher_routing_keeps_launcher_open_separate_from_game_launch():
+    declarations = [
+        decl("app_launcher"),
+        decl("launch_steam_game"),
+        decl("game_updater"),
+    ]
+    router = ToolRouter()
+
+    assert names(router.select_for_request("Apri Steam", declarations)) == {
+        "app_launcher"
+    }
+    assert names(router.select_for_request("Apri Epic Games", declarations)) == {
+        "app_launcher"
+    }
+    assert names(
+        router.select_for_request("Avvia il gioco 730 su Steam", declarations)
+    ) == {"app_launcher", "launch_steam_game"}
+    assert names(
+        router.select_for_request("Avvia Cyberpunk su Steam", declarations)
+    ) == {"app_launcher", "launch_steam_game"}
+    assert router.select_for_request("Gioca a Cyberpunk", declarations) == []
+    assert "game_updater" in names(router.select_for_request(
+        "Aggiorna i giochi Steam", declarations
+    ))
+
+
 def test_terminal_run_is_selected_only_for_explicit_terminal_requests():
     declarations = [decl("terminal_run"), decl("agent_loop"), decl("quick_notes")]
     router = ToolRouter()

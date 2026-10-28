@@ -364,6 +364,87 @@ def test_command_interpreters_are_never_launched(tmp_path, monkeypatch):
     assert opened == []
 
 
+@pytest.mark.parametrize(
+    ("name", "canonical"),
+    [
+        ("Steam", "steam"),
+        ("Epic", "epicgameslauncher"),
+        ("Epic Games", "epicgameslauncher"),
+        ("Epic Games Launcher", "epicgameslauncher"),
+    ],
+)
+def test_game_launcher_aliases_resolve_and_launch_only_after_confirmation(
+    name, canonical, tmp_path, monkeypatch
+):
+    _configure_paths(tmp_path, monkeypatch)
+    executable = tmp_path / "Program Files" / f"{canonical}.exe"
+    executable.parent.mkdir()
+    executable.write_bytes(b"")
+    monkeypatch.setattr(app_launcher, "find_executable", lambda _name: executable)
+    monkeypatch.setattr(app_launcher, "_is_whitelisted", lambda _path: True)
+    opened = []
+    monkeypatch.setattr(app_launcher.os, "startfile", opened.append, raising=False)
+
+    assert app_launcher._canonical_app_name(name) == canonical
+    assert "confirmation" in app_launcher.launch_app(name)
+    assert "Launch requested" in app_launcher.launch_app(name, confirmed=True)
+    assert opened == [str(executable.resolve())]
+
+
+def test_launch_uri_opens_supported_steam_uri(monkeypatch):
+    opened = []
+    monkeypatch.setattr(app_launcher.os, "startfile", opened.append, raising=False)
+
+    assert app_launcher.launch_uri("steam://rungameid/730").startswith("Opened")
+    assert opened == ["steam://rungameid/730"]
+
+
+def test_launch_uri_rejects_unapproved_scheme():
+    with pytest.raises(ValueError, match="Only Steam and Epic"):
+        app_launcher.launch_uri("http://evil.com")
+
+
+def test_launch_uri_accepts_epic_scheme(monkeypatch):
+    opened = []
+    monkeypatch.setattr(app_launcher.os, "startfile", opened.append, raising=False)
+
+    app_launcher.launch_uri("com.epicgames.launcher://apps/Foo")
+
+    assert opened == ["com.epicgames.launcher://apps/Foo"]
+
+
+def test_launch_steam_game_requires_confirmation_and_valid_app_id(monkeypatch):
+    from actions import launch_steam_game
+
+    opened = []
+    monkeypatch.setattr(launch_steam_game, "launch_uri", opened.append)
+
+    pending = launch_steam_game.launch_steam_game({"app_id": "730"})
+    assert pending["result"] == "Ask the user for explicit confirmation"
+    assert opened == []
+
+    result = launch_steam_game.launch_steam_game(
+        {"app_id": "730", "confirmed": True}
+    )
+    assert result["app_id"] == "730"
+    assert opened == ["steam://rungameid/730"]
+
+    with pytest.raises(ValueError, match="positive numeric"):
+        launch_steam_game.launch_steam_game(
+            {"app_id": "730;evil", "confirmed": True}
+        )
+
+
+def test_game_launcher_action_is_discovered_as_write_tool():
+    registry = discover_actions(
+        Path(__file__).resolve().parents[1] / "actions",
+        logger=lambda _message: None,
+    )
+
+    assert registry.has("launch_steam_game")
+    assert registry.risk_class("launch_steam_game") == "write"
+
+
 def test_app_search_cli_only_resolves_and_never_launches(tmp_path, monkeypatch):
     executable = tmp_path / "Code.exe"
     monkeypatch.setattr(app_launcher, "find_executable", lambda _name: executable)

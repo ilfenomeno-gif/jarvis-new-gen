@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import main
 from main import JarvisLive
 
 
@@ -90,6 +91,139 @@ def test_local_text_runs_model_tool_call_and_logs_final_response():
         "role": "assistant",
         "content": "Notepad aperto.",
     }
+
+
+def test_explicit_steam_or_epic_open_is_confirmed_on_the_first_tool_call():
+    for request, app_name in (
+        ("Apri Steam", "Steam"),
+        ("Apri Epic Games", "Epic Games"),
+    ):
+        router = FakeRouter([[
+            {
+                "type": "tool_call",
+                "id": "call-launcher",
+                "name": "app_launcher",
+                "args": {"name": app_name},
+            },
+            {"type": "done", "full_text": ""},
+        ], [
+            {"type": "content", "text": "Launcher aperto."},
+            {"type": "done", "full_text": "Launcher aperto."},
+        ]])
+        live = _live(router)
+        live._select_local_tool_declarations = lambda _text: [
+            {"name": "app_launcher", "risk_class": "destructive"}
+        ]
+        executed = []
+
+        async def execute_tool(call):
+            executed.append((call.name, call.args.copy()))
+            return SimpleNamespace(response={"result": "Launch requested."})
+
+        live._execute_tool = execute_tool
+        asyncio.run(live._handle_local_text(request))
+
+        assert executed == [
+            ("app_launcher", {"name": app_name, "confirmed": True})
+        ]
+        assert live._local_pending_confirmation is None
+
+
+def test_steam_game_launch_requires_matching_explicit_confirmation(monkeypatch):
+    monkeypatch.setattr(main, "require_policy_file", lambda: None)
+    monkeypatch.setattr(main, "route_tool", lambda *_args: None)
+    live = _live(FakeRouter([]))
+    live._last_user_text = "Avvia il gioco 730 su Steam"
+    launched = []
+
+    class Registry:
+        def has(self, name):
+            return name == "launch_steam_game"
+
+        def run(self, name, args, **_kwargs):
+            launched.append((name, args.copy()))
+            return {"result": "Opened launcher URI: steam://rungameid/730"}
+
+    class EmptyRegistry:
+        def has(self, _name):
+            return False
+
+    live._action_registry = EmptyRegistry()
+    live._plugin_registry = Registry()
+
+    async def execute(app_id, *, user_confirmed=False):
+        return await live._execute_tool(
+            SimpleNamespace(
+                id="call-game",
+                name="launch_steam_game",
+                args={"app_id": app_id},
+            ),
+            user_confirmed=user_confirmed,
+        )
+
+    async def scenario():
+        pending = await execute("730")
+        assert pending.response["result"] == "Ask the user for explicit confirmation"
+        assert pending.response["app_id"] == "730"
+
+        mismatch = await execute("731", user_confirmed=True)
+        assert "No matching confirmation" in mismatch.response["result"]
+        assert not launched
+
+        live._last_user_text = "Sì, confermo"
+        approved = await execute("730", user_confirmed=True)
+        assert approved.response["result"]["result"].endswith("steam://rungameid/730")
+        assert launched == [
+            (
+                "launch_steam_game",
+                {"app_id": "730", "confirmed": True},
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_cloud_app_launcher_cannot_rely_on_model_supplied_confirmation(monkeypatch):
+    monkeypatch.setattr(main, "require_policy_file", lambda: None)
+    live = _live(FakeRouter([]))
+    live._last_user_text = "Apri Steam"
+    launched = []
+
+    class Registry:
+        def has(self, name):
+            return name == "app_launcher"
+
+        def run(self, name, args, **_kwargs):
+            launched.append((name, args.copy()))
+            return "Launch requested for Steam."
+
+    live._action_registry = Registry()
+    live._observe_pattern_tool_result = lambda *_args: None
+    response = asyncio.run(
+        live._execute_tool(
+            SimpleNamespace(
+                id="call-launcher",
+                name="app_launcher",
+                args={"name": "Steam", "confirmed": False},
+            )
+        )
+    )
+
+    assert response.response["result"] == "Launch requested for Steam."
+    assert launched == [
+        ("app_launcher", {"name": "Steam", "confirmed": True})
+    ]
+
+
+def test_playing_a_named_game_returns_limit_without_calling_a_tool():
+    router = FakeRouter([])
+    live = _live(router)
+
+    asyncio.run(live._handle_local_text("Gioca a Cyberpunk"))
+
+    assert router.calls == []
+    assert len(live._local_messages) == 3
+    assert "non posso controllarlo in-game" in live.ui.logs[-1]
 
 
 def test_local_model_cannot_run_a_tool_not_selected_for_the_request():
