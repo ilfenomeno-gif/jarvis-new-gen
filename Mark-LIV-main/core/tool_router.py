@@ -84,7 +84,11 @@ GROUPS: tuple[Group, ...] = (
            {"terminal_run"}),
     _group("agent", r"\b(?:fai|compila|esegui|automatizza|agent|loop|obiettivo)\b",
            {"agent_loop"}),
-    _group("games", r"gioc|\bgame|steam|\bepic\b", {"game_updater"}),
+    _group(
+        "games",
+        r"\b(?:steam|epic|gioco|game|launcher|avvia il gioco)\b",
+        {"game_updater", "launch_steam_game", "app_launcher"},
+    ),
     _group("ui", r"pannell|panel|layout|focus|\bdock|workspace|nascondi|\bhide|mostra|\bshow|\blog\b|interfaccia|chiudi il|apri il",
            {"ui_layout"}),
 )
@@ -120,6 +124,62 @@ class ToolRouter:
         )
         if terminal_request and not explicit_agent_request:
             hits = [group for group in hits if group.name != "agent"]
+        gameplay_request = re.search(
+            r"\b(?:gioca|giocare|play)\s+(?:a\s+)?\w+",
+            text,
+            re.IGNORECASE,
+        )
+        if gameplay_request:
+            hits = [group for group in hits if group.name != "games"]
+        elif any(group.name == "games" for group in hits):
+            higher_priority = [
+                group
+                for group in hits
+                if group.name not in {"games", "applications"}
+            ]
+            if higher_priority:
+                hits = [group for group in hits if group.name != "games"]
+            else:
+                launcher_only = re.search(
+                    r"\b(?:apri|aprimi|avvia|lancia|start|launch|open)\b"
+                    r".*\b(?:steam|epic)\b",
+                    text,
+                    re.I,
+                )
+                if launcher_only and not re.search(
+                    r"\b(?:gioco|game)\b|(?:\b(?:avvia|lancia|start|launch)\b.*"
+                    r"\b(?:su|on)\s+steam\b)",
+                    text,
+                    re.I,
+                ):
+                    hits = [
+                        Group(
+                            group.name,
+                            group.pattern,
+                            group.tools - {"game_updater", "launch_steam_game"},
+                            group.prefixes,
+                        )
+                        if group.name == "games"
+                        else group
+                        for group in hits
+                    ]
+                elif re.search(
+                    r"\b(?:avvia|lancia|start|launch|open)\b.*"
+                    r"\b(?:su|on)\s+steam\b",
+                    text,
+                    re.I,
+                ):
+                    hits = [
+                        Group(
+                            group.name,
+                            group.pattern,
+                            group.tools - {"game_updater"},
+                            group.prefixes,
+                        )
+                        if group.name == "games"
+                        else group
+                        for group in hits
+                    ]
         return hits
 
     def select(self, text: str, declarations: list[dict], used: Iterable[str] = ()) -> list[dict]:
@@ -161,6 +221,14 @@ class ToolRouter:
             return []
 
         names = set().union(*(group.tools for group in hits))
+        game_request = re.search(
+            r"\b(?:gioco|game)\b|(?:\b(?:avvia|lancia|start|launch|open)\b.*"
+            r"\b(?:su|on)\s+steam\b)",
+            routing_text,
+            re.I,
+        )
+        if opening_app and not game_request:
+            names.discard("launch_steam_game")
         prefixes = tuple(prefix for group in hits for prefix in group.prefixes)
         return [
             declaration
