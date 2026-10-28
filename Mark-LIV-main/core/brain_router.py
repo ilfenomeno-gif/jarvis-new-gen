@@ -19,6 +19,36 @@ def resolve_ollama_model() -> str:
     return os.environ.get("JARVIS_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
 
 
+def ollama_tool_declarations(
+    declarations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    def normalize_schema(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: (
+                    child.lower()
+                    if key == "type" and isinstance(child, str)
+                    else normalize_schema(child)
+                )
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [normalize_schema(item) for item in value]
+        return value
+
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": declaration["name"],
+                "description": declaration.get("description", ""),
+                "parameters": normalize_schema(declaration.get("parameters", {})),
+            },
+        }
+        for declaration in declarations
+    ]
+
+
 class BrainRouter:
     """Concrete backend switch for the conversational brain."""
 
@@ -30,6 +60,9 @@ class BrainRouter:
             raise ValueError(f"Unknown brain backend: {backend}")
         self.backend = backend
         return f"Brain switched to {backend}"
+
+    def model_name(self) -> str:
+        return resolve_ollama_model()
 
     def stream_chat(
         self,
@@ -88,6 +121,7 @@ class BrainRouter:
                             args = {}
                     yield {
                         "type": "tool_call",
+                        "id": tool_call.get("id"),
                         "name": fn.get("name"),
                         "args": args,
                     }

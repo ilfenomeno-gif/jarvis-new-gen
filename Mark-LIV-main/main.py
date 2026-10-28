@@ -44,6 +44,7 @@ import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import sounddevice as sd
 import numpy as np
@@ -86,7 +87,7 @@ from core.intent_router        import route_tool
 from core.geo_router           import classify_and_route
 from core.prompt_router        import PromptRouter
 from core.tool_router          import ToolRouter
-from core.brain_router         import get_router
+from core.brain_router         import get_router, ollama_tool_declarations
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
 from core                      import audio_devices
@@ -950,6 +951,8 @@ class JarvisLive:
         self._prompt_router = PromptRouter()
         self._tool_router = ToolRouter()
         self._brain_router = get_router()
+        self._local_messages: list[dict[str, object]] = []
+        self._local_chat_lock = asyncio.Lock()
         self._recent_user_texts: collections.deque[str] = collections.deque(maxlen=6)
         self._tools_used: set[str] = set()
         # Native accessibility methods are available immediately, while global
@@ -1264,17 +1267,36 @@ class JarvisLive:
             logging.getLogger(__name__).warning("Pattern observation unavailable: %s", exc)
 
     def _on_text_command(self, text: str):
-        if not self._loop or not self.session:
+        if not self._loop:
             return
 
         lowered = text.strip().lower()
         if "passa al cervello locale" in lowered or "usa ollama" in lowered:
             self._brain_router.switch("local")
-            self.speak("Cervello locale attivo")
+            model = self._brain_router.model_name()
+            self.ui.write_log(
+                f"SYS: Cervello locale attivo ({model}). "
+                "La trascrizione vocale usa ancora Gemini."
+            )
+            if self.session:
+                self.speak("Cervello locale attivo")
             return
         if "torna al cloud" in lowered or "usa gemini" in lowered:
             self._brain_router.switch("gemini")
-            self.speak("Torno al cloud")
+            self.ui.write_log("SYS: Cervello cloud attivo.")
+            if self.session:
+                self.speak("Torno al cloud")
+            return
+
+        if self._brain_router.backend == "local":
+            future = asyncio.run_coroutine_threadsafe(
+                self._handle_local_text(text), self._loop
+            )
+            future.add_done_callback(self._report_local_chat_error)
+            return
+
+        if not self.session:
+            self.ui.write_log("ERR: Sessione Gemini non disponibile.")
             return
 
         self._observe_pattern_feedback(text)
@@ -1297,6 +1319,119 @@ class JarvisLive:
             ),
             self._loop
         )
+
+    def _route_voice_transcript(self, text: str) -> bool:
+        lowered = text.strip().lower()
+        if "passa al cervello locale" in lowered or "usa ollama" in lowered:
+            self._brain_router.switch("local")
+            self.ui.write_log(
+                f"SYS: Cervello locale attivo ({self._brain_router.model_name()}). "
+                "La trascrizione vocale usa ancora Gemini."
+            )
+            return True
+        if "torna al cloud" in lowered or "usa gemini" in lowered:
+            self._brain_router.switch("gemini")
+            self.ui.write_log("SYS: Cervello cloud attivo.")
+            return True
+        if self._brain_router.backend != "local":
+            return False
+
+        task = asyncio.create_task(self._handle_local_text(text))
+        task.add_done_callback(self._report_local_chat_error)
+        return True
+
+    def _report_local_chat_error(self, future) -> None:
+        try:
+            future.result()
+        except Exception as exc:
+            logging.getLogger(__name__).exception("Local brain request failed")
+            self.ui.write_log(f"ERR: Cervello locale non disponibile: {exc}")
+
+    async def _handle_local_text(self, text: str) -> None:
+        async with self._local_chat_lock:
+            self.ui.set_state("THINKING")
+            if not self._local_messages:
+                self._local_messages.append({
+                    "role": "system",
+                    "content": _load_system_prompt(),
+                })
+            self._local_messages.append({"role": "user", "content": text})
+            tools = ollama_tool_declarations(self._select_tool_declarations())
+            assistant_text = ""
+            try:
+                for _ in range(5):
+                    events = await asyncio.to_thread(
+                        lambda: list(self._brain_router.stream_chat(
+                            self._local_messages, tools=tools
+                        ))
+                    )
+                    if not any(event.get("type") == "done" for event in events):
+                        raise RuntimeError("Local model ended without a completion event")
+                    assistant_text = "".join(
+                        event.get("text", "")
+                        for event in events
+                        if event.get("type") == "content"
+                    )
+                    tool_calls = [
+                        event for event in events
+                        if event.get("type") == "tool_call"
+                    ]
+                    if not tool_calls:
+                        if assistant_text:
+                            self._local_messages.append({
+                                "role": "assistant",
+                                "content": assistant_text,
+                            })
+                        break
+
+                    self._local_messages.append({
+                        "role": "assistant",
+                        "content": assistant_text,
+                        "tool_calls": [
+                            {
+                                "id": call.get("id") or f"call_{index}",
+                                "type": "function",
+                                "function": {
+                                    "name": call["name"],
+                                    "arguments": call.get("args", {}),
+                                },
+                            }
+                            for index, call in enumerate(tool_calls)
+                        ],
+                    })
+                    for index, call in enumerate(tool_calls):
+                        name = call.get("name")
+                        if not isinstance(name, str) or not name:
+                            raise ValueError("Ollama returned a tool call without a name")
+                        function_response = await self._execute_tool(SimpleNamespace(
+                            id=call.get("id") or f"call_{index}",
+                            name=name,
+                            args=call.get("args", {}),
+                        ))
+                        self._local_messages.append({
+                            "role": "tool",
+                            "name": name,
+                            "content": json.dumps(
+                                function_response.response,
+                                ensure_ascii=False,
+                                default=str,
+                            ),
+                        })
+                else:
+                    raise RuntimeError("Local model exceeded the tool-call limit")
+
+                if not assistant_text:
+                    raise RuntimeError("Local model returned no response text")
+                self._session_log.append(f"User: {text}")
+                self._session_log.append(f"{self._asst_name}: {assistant_text}")
+                self.ui.write_log(f"{self._asst_name}: {assistant_text}")
+                self._local_messages = [
+                    self._local_messages[0],
+                    *self._local_messages[1:][-40:],
+                ]
+            finally:
+                if not self.ui.muted:
+                    self.ui.set_state("LISTENING")
 
     def _schedule_geo_route(self, text: str) -> None:
         decision = classify_and_route(text)
@@ -1504,6 +1639,14 @@ class JarvisLive:
         require_policy_file()
         name = fc.name
         args = dict(fc.args or {})
+        local_mode = (
+            getattr(getattr(self, "_brain_router", None), "backend", None) == "local"
+        )
+        speak = (
+            (lambda text: self.ui.write_log(f"{self._asst_name}: {text}"))
+            if local_mode
+            else self.speak
+        )
 
         logged_args = dict(args)
         if name == "open_website" and "url" in logged_args:
@@ -1545,7 +1688,7 @@ class JarvisLive:
                 def run_action():
                     ctx = {
                         "player": self.ui,
-                        "speak": self.speak,
+                        "speak": speak,
                         "response": None,
                         "session_memory": None,
                     }
@@ -1680,11 +1823,11 @@ class JarvisLive:
                 result = r or "Done."
 
             elif name == "code_helper":
-                r = await loop.run_in_executor(None, lambda: code_helper(parameters=args, player=self.ui, speak=self.speak))
+                r = await loop.run_in_executor(None, lambda: code_helper(parameters=args, player=self.ui, speak=speak))
                 result = r or "Done."
 
             elif name == "dev_agent":
-                r = await loop.run_in_executor(None, lambda: dev_agent(parameters=args, player=self.ui, speak=self.speak))
+                r = await loop.run_in_executor(None, lambda: dev_agent(parameters=args, player=self.ui, speak=speak))
                 result = r or "Done."
 
             elif name == "supervisor_agent":
@@ -1717,7 +1860,7 @@ class JarvisLive:
                     args["file_path"] = self.ui.current_file
                 r = await loop.run_in_executor(
                     None,
-                    lambda: file_processor(parameters=args, player=self.ui, speak=self.speak)
+                    lambda: file_processor(parameters=args, player=self.ui, speak=speak)
                 )
                 result = r or "Done."
 
@@ -1726,7 +1869,7 @@ class JarvisLive:
                 result = r or "Done."
 
             elif name == "game_updater":
-                r = await loop.run_in_executor(None, lambda: game_updater(parameters=args, player=self.ui, speak=self.speak))
+                r = await loop.run_in_executor(None, lambda: game_updater(parameters=args, player=self.ui, speak=speak))
                 result = r or "Done."
 
             elif name == "system_status":
@@ -1783,7 +1926,10 @@ class JarvisLive:
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
             traceback.print_exc()
-            self.speak_error(name, e)
+            if local_mode:
+                self.ui.write_log(f"ERR: {name} — {str(e)[:120]}")
+            else:
+                self.speak_error(name, e)
 
         if isinstance(result, str):
             self._observe_pattern_tool_result(name, args, result)
@@ -2014,7 +2160,7 @@ class JarvisLive:
                                 print("[JARVIS] 🔗 Session resumption armed")
                             self._resume_handle = _sru.new_handle
 
-                    if response.data:
+                    if response.data and self._brain_router.backend != "local":
                         if self._interrupted:
                             pass  # discard: interrupted
                         else:
@@ -2055,6 +2201,7 @@ class JarvisLive:
                                 continue
 
                             full_in = " ".join(in_buf).strip()
+                            local_voice_handled = False
                             if full_in:
                                 self._observe_pattern_feedback(full_in)
                                 self._last_user_text = full_in
@@ -2071,10 +2218,11 @@ class JarvisLive:
                                         "text": full_in,
                                         "ts": datetime.now().isoformat(),
                                     }))
+                                local_voice_handled = self._route_voice_transcript(full_in)
                             in_buf = []
 
                             full_out = " ".join(out_buf).strip()
-                            if full_out:
+                            if full_out and not local_voice_handled:
                                 self.ui.write_log(f"{self._asst_name}: {full_out}")
                                 self._session_log.append(f"{self._asst_name}: {full_out}")
                                 if self._dashboard:
@@ -2116,7 +2264,7 @@ class JarvisLive:
                                     self.ui.stop_camera_stream()
                                 asyncio.create_task(_cam_close())
 
-                    if response.tool_call:
+                    if response.tool_call and self._brain_router.backend != "local":
                         fn_responses = []
                         for fc in response.tool_call.function_calls:
                             print(f"[JARVIS] 📞 {fc.name}")

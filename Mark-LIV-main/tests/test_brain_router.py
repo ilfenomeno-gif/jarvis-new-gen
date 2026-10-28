@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from core.brain_router import BrainRouter, DEFAULT_OLLAMA_MODEL, resolve_ollama_model
+from core.brain_router import (
+    BrainRouter,
+    DEFAULT_OLLAMA_MODEL,
+    ollama_tool_declarations,
+    resolve_ollama_model,
+)
 
 
 def test_switch_local_and_gemini():
@@ -20,6 +25,37 @@ def test_default_ollama_model_is_valid(monkeypatch):
 
     monkeypatch.setenv("JARVIS_OLLAMA_MODEL", "mistral:latest")
     assert resolve_ollama_model() == "mistral:latest"
+
+
+def test_ollama_tool_declarations_use_lowercase_json_schema_types():
+    tools = ollama_tool_declarations([{
+        "name": "open_app",
+        "description": "Open an app",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "app_name": {"type": "STRING"},
+                "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+            },
+            "required": ["app_name"],
+        },
+    }])
+
+    assert tools == [{
+        "type": "function",
+        "function": {
+            "name": "open_app",
+            "description": "Open an app",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "app_name": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["app_name"],
+            },
+        },
+    }]
 
 
 def test_stream_ollama_yields_content_and_done(monkeypatch):
@@ -62,6 +98,7 @@ def test_stream_ollama_yields_tool_calls(monkeypatch):
             yield json.dumps({
                 "message": {
                     "tool_calls": [{
+                        "id": "call-1",
                         "function": {
                             "name": "open_app",
                             "arguments": {"app_name": "Notepad"},
@@ -75,5 +112,10 @@ def test_stream_ollama_yields_tool_calls(monkeypatch):
     router = BrainRouter(backend="local")
     events = list(router.stream_chat([{"role": "user", "content": "test"}], tools=[{"name": "open_app"}]))
 
-    assert events[0] == {"type": "tool_call", "name": "open_app", "args": {"app_name": "Notepad"}}
+    assert events[0] == {
+        "type": "tool_call",
+        "id": "call-1",
+        "name": "open_app",
+        "args": {"app_name": "Notepad"},
+    }
     assert events[1] == {"type": "done", "full_text": ""}
