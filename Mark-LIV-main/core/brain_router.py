@@ -12,7 +12,7 @@ from typing import Any, Generator
 import httpx
 
 OLLAMA_URL = os.environ.get("JARVIS_OLLAMA_URL", "http://127.0.0.1:11434")
-DEFAULT_OLLAMA_MODEL = "llama3.2:latest"
+DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 
 
 def resolve_ollama_model() -> str:
