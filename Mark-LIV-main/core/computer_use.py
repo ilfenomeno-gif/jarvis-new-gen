@@ -13,12 +13,17 @@ from typing import Any
 
 
 INPUT_ALLOWLIST_ENV = "JARVIS_INPUT_ALLOWLIST"
+# This default is intentionally narrow; installations may override it via the environment.
 DEFAULT_ALLOWED_PROCESSES = frozenset({
     "notepad.exe",
     "chrome.exe",
     "msedge.exe",
     "firefox.exe",
     "code.exe",
+    "steam.exe",
+    "steamwebhelper.exe",
+    "epicgameslauncher.exe",
+    "epicwebhelper.exe",
 })
 EMERGENCY_STOP_HOTKEY = "ctrl+alt+esc"
 MAX_UIA_CONTROLS = 300
