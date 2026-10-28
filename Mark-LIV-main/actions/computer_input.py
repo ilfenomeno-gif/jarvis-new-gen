@@ -25,7 +25,7 @@ TOOL = {
                 "type": "STRING",
                 "enum": [
                     "click", "click_text", "double_click", "drag", "move",
-                    "press", "hotkey", "scroll", "type",
+                    "press", "hotkey", "scroll", "type", "type_text",
                 ],
             },
             "x": {"type": "INTEGER"},

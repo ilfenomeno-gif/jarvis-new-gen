@@ -390,7 +390,7 @@ def click_uia_text(target: str, hwnd: int) -> str:
 
 def validate_input_request(parameters: dict[str, Any]) -> str:
     action = str(parameters.get("action", "")).strip().casefold()
-    if action not in {"click", "click_text", "double_click", "drag", "move", "press", "hotkey", "scroll", "type"}:
+    if action not in {"click", "click_text", "double_click", "drag", "move", "press", "hotkey", "scroll", "type", "type_text"}:
         raise ValueError(f"Unsupported computer input action: {action!r}.")
 
     if action in {"click", "double_click", "move"}:
@@ -412,7 +412,7 @@ def validate_input_request(parameters: dict[str, Any]) -> str:
             raise ValueError("direction must be up or down.")
         if isinstance(amount, bool) or not isinstance(amount, int) or not 1 <= amount <= 10:
             raise ValueError("amount must be an integer from 1 to 10.")
-    elif action == "type":
+    elif action in {"type", "type_text"}:
         text = parameters.get("text")
         if not isinstance(text, str) or not text or len(text) > 1000:
             raise ValueError("text must contain between 1 and 1000 characters.")
@@ -508,7 +508,7 @@ def execute_input(parameters: dict[str, Any]) -> dict[str, Any]:
         _assert_same_foreground_with_retry(hwnd, process_name)
         pyautogui.scroll(amount if direction == "up" else -amount)
         result = f"Scrolled {direction} by {amount}."
-    else:
+    elif action in {"type", "type_text"}:
         text = parameters["text"]
         for character in text:
             _check_emergency_stop()

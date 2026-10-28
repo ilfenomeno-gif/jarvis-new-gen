@@ -1355,7 +1355,7 @@ class JarvisLive:
     @staticmethod
     def _is_explicit_app_launch(text: str, args: dict) -> bool:
         opening_verb = re.search(
-            r"\b(?:apri|aprimi|avvia|avvii|lancia|launch|open|start)\b",
+            r"\b(?:apri|aprimi|avvia|avvii|apra|aprite|lancia|launch|open|start)\b",
             text,
             re.I,
         )
@@ -1382,6 +1382,61 @@ class JarvisLive:
                 if candidate and candidate.casefold() == requested_app.casefold():
                     return True
         return False
+
+    @staticmethod
+    def _explicit_app_type_request(text: str) -> dict[str, str] | None:
+        app_pattern = (
+            r"(?:blocco\s+note|notepad(?:\.exe)?|google\s+chrome|chrome(?:\.exe)?|"
+            r"microsoft\s+edge|msedge(?:\.exe)?|edge|firefox(?:\.exe)?|"
+            r"visual\s+studio\s+code|code(?:\.exe)?)"
+        )
+        opening = re.search(
+            rf"\b(?:apri|aprimi|avvia|apra|aprite)\s+(?P<app>{app_pattern})"
+            r"\s*(?:,|\b(?:e|poi|quindi)\b)\s*"
+            r"(?:scrivi|digita|type|write)\s+(?P<text>.+?)\s*$",
+            text,
+            re.I,
+        )
+        writing = None if opening else re.search(
+            rf"\b(?:scrivi|digita|type|write)\s+(?P<text>.+?)\s+"
+            rf"(?:in|su|nel|nella|dentro)\s+(?P<app>{app_pattern})\s*$",
+            text,
+            re.I,
+        )
+        match = opening or writing
+        if match is None:
+            return None
+
+        app_name = _canonical_app_name(match.group("app"))
+        content = match.group("text").strip()
+        if not app_name or not content or len(content) > 1000:
+            return None
+
+        process_names = {
+            "notepad": "notepad.exe",
+            "notepad.exe": "notepad.exe",
+            "chrome": "chrome.exe",
+            "chrome.exe": "chrome.exe",
+            "google chrome": "chrome.exe",
+            "edge": "msedge.exe",
+            "microsoft edge": "msedge.exe",
+            "msedge": "msedge.exe",
+            "msedge.exe": "msedge.exe",
+            "firefox": "firefox.exe",
+            "firefox.exe": "firefox.exe",
+            "code": "code.exe",
+            "code.exe": "code.exe",
+            "visual studio code": "code.exe",
+        }
+        process_name = process_names.get(app_name.casefold())
+        if process_name is None:
+            return None
+        return {
+            "app_name": app_name,
+            "process_name": process_name,
+            "text": content,
+            "opens_app": opening is not None,
+        }
 
     @staticmethod
     def _is_explicit_confirmation(text: str) -> bool:
@@ -1419,8 +1474,9 @@ class JarvisLive:
                             "A direct request to open a recognized app is itself explicit "
                             "confirmation; indirect or ambiguous requests still require a "
                             "separate confirmation. Every terminal command requires a separate "
-                            "explicit user confirmation before execution. Direct Computer Use "
-                            "mouse or keyboard input requires separate confirmation per action. "
+                            "explicit user confirmation before execution. Computer Use inputs "
+                            "still require confirmation unless the user's request already "
+                            "specifies both the recognized app and exact text to type. "
                             "The bounded agent loop instead requires session approval bound to "
                             "the exact goal and action limit; its screen images are sent to "
                             "Gemini cloud."
@@ -1432,6 +1488,8 @@ class JarvisLive:
                 tools = ollama_tool_declarations(selected_tools)
                 assistant_text = ""
                 completed_mutations: set[str] = set()
+                compound_request = self._explicit_app_type_request(text)
+                launched_compound_app = False
                 for _ in range(5):
                     events = await asyncio.to_thread(
                         lambda: list(self._brain_router.stream_chat(
@@ -1449,6 +1507,10 @@ class JarvisLive:
                         event for event in events
                         if event.get("type") == "tool_call"
                     ]
+                    if compound_request and compound_request["opens_app"]:
+                        tool_calls.sort(
+                            key=lambda call: call.get("name") != "app_launcher"
+                        )
                     if not tool_calls:
                         if assistant_text:
                             self._local_messages.append({
@@ -1480,6 +1542,19 @@ class JarvisLive:
                         args = call.get("args", {})
                         if not isinstance(args, dict):
                             raise ValueError(f"Ollama returned invalid arguments for {name}")
+                        should_stop = False
+                        pending_confirmation = False
+                        skip_compound_input = bool(
+                            name == "computer_input"
+                            and compound_request
+                            and compound_request["opens_app"]
+                            and not launched_compound_app
+                        )
+                        if name == "computer_input" and compound_request and not skip_compound_input:
+                            args = {
+                                "action": "type_text",
+                                "text": compound_request["text"],
+                            }
                         declaration = next(
                             (tool for tool in selected_tools if tool["name"] == name),
                             {},
@@ -1498,10 +1573,26 @@ class JarvisLive:
                             }
                             if name == "app_launcher" and self._is_explicit_app_launch(text, args):
                                 args["confirmed"] = True
+                            if (
+                                name == "computer_input"
+                                and compound_request
+                                and not skip_compound_input
+                            ):
+                                args["confirmed"] = True
 
-                        should_stop = False
-                        pending_confirmation = False
-                        if name not in allowed_tool_names:
+                        if skip_compound_input:
+                            tool_result = {
+                                "result": (
+                                    "The requested application was not confirmed "
+                                    "in the foreground; no input was sent."
+                                )
+                            }
+                            assistant_text = (
+                                "L'applicazione non è in primo piano; "
+                                "non ho inviato il testo."
+                            )
+                            should_stop = True
+                        elif name not in allowed_tool_names:
                             tool_result = {
                                 "result": "Tool not available for this request; no action was taken."
                             }
@@ -1539,6 +1630,20 @@ class JarvisLive:
                                 result_text = str(result_value.get("result", ""))
                             else:
                                 result_text = str(result_value)
+                            if (
+                                name == "app_launcher"
+                                and compound_request
+                                and compound_request["opens_app"]
+                            ):
+                                launched_compound_app = result_text.startswith(
+                                    ("Launch completed", "Launch requested", "Launch started")
+                                )
+                                if not launched_compound_app:
+                                    assistant_text = result_text or (
+                                        "L'applicazione non è stata avviata; "
+                                        "non ho inviato il testo."
+                                    )
+                                    should_stop = True
                             if (
                                 "Ask the user for explicit confirmation" in result_text
                             ):
@@ -2069,6 +2174,15 @@ class JarvisLive:
             self._local_pending_confirmation = None
 
         if name == "computer_input":
+            compound_request = self._explicit_app_type_request(
+                getattr(self, "_last_user_text", "")
+            )
+            if compound_request:
+                args = {
+                    "action": "type_text",
+                    "text": compound_request["text"],
+                    "confirmed": True,
+                }
             pending = getattr(self, "_local_pending_confirmation", None)
             requested_args = {
                 key: value
@@ -2090,7 +2204,36 @@ class JarvisLive:
                     name=name,
                     response={"result": f"Invalid input request: {exc}"},
                 )
-            if (
+            if compound_request:
+                try:
+                    arm_emergency_stop()
+                    hwnd, process_name = require_allowed_foreground()
+                except Exception as exc:
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={"result": f"Input disabled: {exc}"},
+                    )
+                if process_name != compound_request["process_name"]:
+                    return types.FunctionResponse(
+                        id=fc.id,
+                        name=name,
+                        response={
+                            "result": (
+                                f"{compound_request['app_name']} is not the foreground app; "
+                                "no input was sent."
+                            )
+                        },
+                    )
+                args = {
+                    **requested_args,
+                    "confirmed": True,
+                    "_expected_window": hwnd,
+                    "_expected_process": process_name,
+                }
+                self._local_pending_confirmation = None
+                self._computer_input_confirmation_available = False
+            elif (
                 pending
                 and pending.get("name") == name
                 and pending.get("args") == requested_args
