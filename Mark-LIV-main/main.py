@@ -59,6 +59,7 @@ from memory.memory_manager import (
 
 from actions.file_processor import file_processor
 from actions.open_app          import open_app
+from actions.app_launcher      import _canonical_app_name
 from actions.computer_settings import computer_settings
 from actions.screen_processor  import _capture_camera, _capture_screen
 from actions.youtube_video     import youtube_video
@@ -1350,6 +1351,46 @@ class JarvisLive:
             logging.getLogger(__name__).exception("Local brain request failed")
             self.ui.write_log(f"ERR: Cervello locale non disponibile: {exc}")
 
+    @staticmethod
+    def _is_explicit_app_launch(text: str, args: dict) -> bool:
+        opening_verb = re.search(
+            r"\b(?:apri|aprimi|avvia|avvii|lancia|launch|open|start)\b",
+            text,
+            re.I,
+        )
+        app_name = args.get("name") or args.get("app_name")
+        if not opening_verb or not isinstance(app_name, str):
+            return False
+
+        requested_app = _canonical_app_name(app_name)
+        if requested_app is None:
+            return False
+        requested_words = re.findall(r"[\w.]+", requested_app.casefold())
+        tail = text[opening_verb.end():]
+        tail = re.sub(
+            r"^\s*(?:(?:il|lo|la|i|gli|le|un|uno|una|the|a|an)\s+)+",
+            "",
+            tail,
+            flags=re.I,
+        )
+        words = re.findall(r"[\w.]+", tail.casefold())
+        max_window = max(2, len(requested_words))
+        for size in range(1, max_window + 1):
+            for start in range(len(words) - size + 1):
+                candidate = _canonical_app_name(" ".join(words[start:start + size]))
+                if candidate and candidate.casefold() == requested_app.casefold():
+                    return True
+        return False
+
+    @staticmethod
+    def _is_explicit_confirmation(text: str) -> bool:
+        return bool(re.fullmatch(
+            r"(?:s[iì](?:\s*,?\s*confermo(?:\s+.+)?)?|"
+            r"confermo(?:\s+.+)?|procedi(?:\s+.+)?|approvo(?:\s+.+)?|"
+            r"yes(?:\s*,?\s*i confirm)?|confirm|go ahead)[.!]?",
+            text.strip().lower(),
+        ))
+
     async def _handle_local_text(self, text: str) -> None:
         async with self._local_chat_lock:
             self.ui.set_state("THINKING")
@@ -1367,7 +1408,11 @@ class JarvisLive:
                             "without tools. Use only a tool provided for the current request; "
                             "never call unrelated tools, create notes, or save memory unless "
                             "the user explicitly asks. Never repeat a state-changing tool call. "
-                            "A desktop app launch requires a separate explicit user confirmation."
+                            "A desktop app launch requires a separate explicit user confirmation. "
+                            "A direct request to open a recognized app is itself explicit "
+                            "confirmation; indirect or ambiguous requests still require a "
+                            "separate confirmation. Every terminal command requires a separate "
+                            "explicit user confirmation before execution."
                         ),
                     })
                 self._local_messages.append({"role": "user", "content": text})
@@ -1429,8 +1474,13 @@ class JarvisLive:
                             {},
                         )
                         risk_class = declaration.get("risk_class", "read")
-                        if risk_class == "destructive" or name == "app_launcher":
+                        if risk_class == "destructive" or name in {
+                            "app_launcher",
+                            "terminal_run",
+                        }:
                             args = {key: value for key, value in args.items() if key != "confirmed"}
+                            if name == "app_launcher" and self._is_explicit_app_launch(text, args):
+                                args["confirmed"] = True
 
                         should_stop = False
                         pending_confirmation = False
@@ -1466,7 +1516,11 @@ class JarvisLive:
                                 "app_launcher",
                             }:
                                 completed_mutations.add(name)
-                            result_text = str(tool_result.get("result", ""))
+                            result_value = tool_result.get("result", "")
+                            if isinstance(result_value, dict):
+                                result_text = str(result_value.get("result", ""))
+                            else:
+                                result_text = str(result_value)
                             if (
                                 "Ask the user for explicit confirmation" in result_text
                             ):
@@ -1475,11 +1529,18 @@ class JarvisLive:
                                     "name": name,
                                     "args": args,
                                 }
-                                target = args.get("name") or args.get("app_name") or name
-                                assistant_text = (
-                                    f"Signore, per completare {target} è necessaria la Sua "
-                                    "conferma esplicita. Risponda «Sì, confermo» per procedere."
-                                )
+                                if name == "terminal_run":
+                                    assistant_text = (
+                                        "Signore, eseguire questo comando? "
+                                        f"`{args.get('command', '')}`. Risponda «Sì, confermo» "
+                                        "per procedere."
+                                    )
+                                else:
+                                    target = args.get("name") or args.get("app_name") or name
+                                    assistant_text = (
+                                        f"Signore, per completare {target} è necessaria la Sua "
+                                        "conferma esplicita. Risponda «Sì, confermo» per procedere."
+                                    )
                                 pending_confirmation = True
                         self._local_messages.append({
                             "role": "tool",
@@ -1531,12 +1592,7 @@ class JarvisLive:
             return False
 
         normalized = text.strip().lower()
-        affirmative = re.fullmatch(
-            r"(?:s[iì](?:\s*,?\s*confermo(?:\s+.+)?)?|"
-            r"confermo(?:\s+.+)?|procedi(?:\s+.+)?|approvo(?:\s+.+)?|"
-            r"yes(?:\s*,?\s*i confirm)?|confirm|go ahead)[.!]?",
-            normalized,
-        )
+        affirmative = self._is_explicit_confirmation(text)
         negative = re.fullmatch(
             r"(?:no|annulla|cancella|non procedere)(?:\s+.+)?[.!]?",
             normalized,
@@ -1553,12 +1609,22 @@ class JarvisLive:
         else:
             args = dict(pending["args"])
             args["confirmed"] = True
-            response = await self._execute_tool(SimpleNamespace(
+            tool_call = SimpleNamespace(
                 id=pending["id"],
                 name=pending["name"],
                 args=args,
-            ))
-            assistant_text = str(response.response.get("result", ""))
+            )
+            response = (
+                await self._execute_tool(tool_call, user_confirmed=True)
+                if pending["name"] == "terminal_run"
+                else await self._execute_tool(tool_call)
+            )
+            response_result = response.response.get("result", "")
+            assistant_text = (
+                json.dumps(response.response, ensure_ascii=False, default=str)
+                if pending["name"] == "terminal_run"
+                else str(response_result)
+            )
         self._local_messages.append({"role": "assistant", "content": assistant_text})
         self._session_log.append(f"User: {text}")
         self._session_log.append(f"{self._asst_name}: {assistant_text}")
@@ -1773,7 +1839,9 @@ class JarvisLive:
             cfg["proactivity"] = types.ProactivityConfig(proactive_audio=True)
         return types.LiveConnectConfig(**cfg)
 
-    async def _execute_tool(self, fc) -> types.FunctionResponse:
+    async def _execute_tool(
+        self, fc, *, user_confirmed: bool = False
+    ) -> types.FunctionResponse:
         require_policy_file()
         name = fc.name
         args = dict(fc.args or {})
@@ -1799,6 +1867,35 @@ class JarvisLive:
                 name=name,
                 response={"result": decision.clarification, "blocked": True},
             )
+
+        if name == "terminal_run":
+            pending = getattr(self, "_local_pending_confirmation", None)
+            if user_confirmed:
+                args["confirmed"] = True
+            elif (
+                pending
+                and pending.get("name") == name
+                and pending.get("args", {}).get("command") == args.get("command")
+                and self._is_explicit_confirmation(getattr(self, "_last_user_text", ""))
+            ):
+                args = dict(pending["args"])
+                args["confirmed"] = True
+            else:
+                args.pop("confirmed", None)
+                self._local_pending_confirmation = {
+                    "id": fc.id,
+                    "name": name,
+                    "args": args,
+                }
+                return types.FunctionResponse(
+                    id=fc.id,
+                    name=name,
+                    response={
+                        "result": "Ask the user for explicit confirmation",
+                        "command": args.get("command", ""),
+                    },
+                )
+            self._local_pending_confirmation = None
 
         if name == "save_memory":
             category = args.get("category", "notes")
@@ -2076,10 +2173,12 @@ class JarvisLive:
             self.ui.set_state("LISTENING")
 
         print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
-        return types.FunctionResponse(
-            id=fc.id, name=name,
-            response={"result": result}
+        response = (
+            result
+            if name == "terminal_run" and isinstance(result, dict)
+            else {"result": result}
         )
+        return types.FunctionResponse(id=fc.id, name=name, response=response)
 
     async def _send_realtime(self):
         while True:
@@ -2342,6 +2441,20 @@ class JarvisLive:
                             local_voice_handled = False
                             if full_in:
                                 self._observe_pattern_feedback(full_in)
+                                pending_confirmation = getattr(
+                                    self, "_local_pending_confirmation", None
+                                )
+                                if (
+                                    pending_confirmation
+                                    and pending_confirmation.get("name") == "terminal_run"
+                                    and getattr(
+                                        getattr(self, "_brain_router", None),
+                                        "backend",
+                                        None,
+                                    ) != "local"
+                                    and not self._is_explicit_confirmation(full_in)
+                                ):
+                                    self._local_pending_confirmation = None
                                 self._last_user_text = full_in
                                 self._recent_user_texts.append(full_in)
                                 self._schedule_geo_route(full_in)
