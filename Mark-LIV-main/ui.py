@@ -145,6 +145,14 @@ class _SafeBrowserPage(QWebEnginePage):
             return False
         return super().acceptNavigationRequest(url, navigation_type, is_main_frame)
 
+
+class _HudBrowserPage(QWebEnginePage):
+    def acceptNavigationRequest(self, url, navigation_type, is_main_frame):
+        if url.scheme() != "http" or url.host() not in ("127.0.0.1", "localhost"):
+            return False
+        return super().acceptNavigationRequest(url, navigation_type, is_main_frame)
+
+
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -3018,6 +3026,7 @@ class MainWindow(QMainWindow):
     _generation_fallback_sig = pyqtSignal(object)
     _content_hide_sig = pyqtSignal(str)      # title prefix of the content panel to close
     _content_sig      = pyqtSignal(str, str)   # (title, text) — thread-safe content display
+    _hud_browser_sig  = pyqtSignal(str)
     _reconfig_sig     = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig       = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _cam_stream_sig   = pyqtSignal(bool)       # True=start live stream, False=stop
@@ -3177,7 +3186,7 @@ class MainWindow(QMainWindow):
         )
         _cam_v.addWidget(self._cam_live_lbl, stretch=1)
 
-        # Stack: 0 = animated HUD, 1 = live camera, 2 = GEV
+        # Stack: animated HUD fallback, camera, GEV, embedded browser HUD
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
@@ -3199,6 +3208,17 @@ class MainWindow(QMainWindow):
         self._gev_stack.addWidget(self._gev_view)
         self._gev_stack.setCurrentWidget(self._gev_placeholder)
         self._hud_cam_stack.addWidget(self._gev_stack)
+
+        self._hud_browser_view = QWebEngineView()
+        self._hud_browser_view.setPage(_HudBrowserPage(self._hud_browser_view))
+        self._hud_browser_view.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._hud_browser_view.loadFinished.connect(
+            self._on_hud_browser_load_finished
+        )
+        self._hud_browser_loaded = False
+        self._hud_cam_stack.addWidget(self._hud_browser_view)
 
         self._browser_panel = self._build_browser_panel()
         self._browser_return_widget: QWidget | None = None
@@ -3288,6 +3308,7 @@ class MainWindow(QMainWindow):
         self._hud_reload_timer.timeout.connect(self.hud.poll_hud_reload)
         self._hud_reload_timer.start()
         self._content_sig.connect(self._show_content)
+        self._hud_browser_sig.connect(self._load_hud_browser)
         self._content_hide_sig.connect(self._hide_content_if)
         self._widget_sig.connect(self._on_widget)
         self._gev_send_sig.connect(self._on_gev_send)
@@ -3634,6 +3655,32 @@ class MainWindow(QMainWindow):
             ]),
         )
 
+    def _active_hud_widget(self) -> QWidget:
+        return self._hud_browser_view if self._hud_browser_loaded else self.hud
+
+    def _load_hud_browser(self, url: str) -> None:
+        target = QUrl(url)
+        if (
+            not target.isValid()
+            or target.scheme() != "http"
+            or target.host() not in ("127.0.0.1", "localhost")
+            or not 1 <= target.port(-1) <= 65535
+        ):
+            self._log_sig.emit("SYS: HUD browser URL must use the local Jarvis bridge.")
+            return
+        self._hud_browser_view.load(target)
+
+    def _on_hud_browser_load_finished(self, succeeded: bool) -> None:
+        self._hud_browser_loaded = bool(succeeded)
+        if succeeded:
+            self._hud_cam_stack.setCurrentWidget(self._hud_browser_view)
+            self._main_content_stack.setCurrentWidget(self._hud_cam_stack)
+        else:
+            self._hud_cam_stack.setCurrentWidget(self.hud)
+            self._log_sig.emit(
+                "SYS: Embedded HUD failed to load; using the native HUD instead."
+            )
+
     def _viewer3d_set_hover(self, name: str, text: str) -> None:
         self._viewer3d_hover_state = {"name": name, "text": text}
 
@@ -3651,7 +3698,7 @@ class MainWindow(QMainWindow):
             self._hud_cam_stack.setCurrentWidget(view)
             self._main_content_stack.setCurrentWidget(self._hud_cam_stack)
         elif self._viewer3d is not None:
-            self._hud_cam_stack.setCurrentWidget(self.hud)
+            self._hud_cam_stack.setCurrentWidget(self._active_hud_widget())
 
     def viewer3d_call(self, function: str, args_json: str) -> None:
         from core.viewer3d import build_call
@@ -3709,7 +3756,7 @@ class MainWindow(QMainWindow):
         if start:
             self._hud_cam_stack.setCurrentIndex(1)
         else:
-            self._hud_cam_stack.setCurrentIndex(0)
+            self._hud_cam_stack.setCurrentWidget(self._active_hud_widget())
             self._cam_live_lbl.clear()
 
     def _on_cam_frame(self, data: bytes) -> None:
@@ -3792,10 +3839,10 @@ class MainWindow(QMainWindow):
     def hide_gev_tab(self) -> None:
         """Return to Jarvis's HUD while keeping the GEV page loaded."""
         if not self._gev_tab_open:
-            self._hud_cam_stack.setCurrentWidget(self.hud)
+            self._hud_cam_stack.setCurrentWidget(self._active_hud_widget())
             return
         self._gev_tab_open = False
-        self._hud_cam_stack.setCurrentWidget(self.hud)
+        self._hud_cam_stack.setCurrentWidget(self._active_hud_widget())
         if self._gev_previous_content_visible:
             self._content_panel.show()
         else:
@@ -6557,6 +6604,10 @@ class JarvisUI:
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)
+
+    def show_hud_browser(self, url: str) -> None:
+        """Load the bridge HUD in Jarvis's central UI without opening a browser."""
+        self._win._hud_browser_sig.emit(str(url))
 
     def load_gev(self) -> None:
         self.send_to_gev({"action": "open"})

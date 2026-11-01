@@ -145,6 +145,26 @@ python main.py
 
 In alternativa, `python setup.py` installa le dipendenze, prepara Playwright e verifica l'integrazione Windows quando disponibile.
 
+## HUD browser
+
+`python main.py` carica la mappa 3D interattiva in
+`core/jarvis_hud.html` direttamente nell'area centrale Qt. Il bridge locale
+(`127.0.0.1:8765`) invia telemetria via SSE: CPU, RAM, disco, rete, uptime e
+processi da `psutil` (se installato), GPU NVIDIA da `nvidia-smi`. Temperatura e
+GPU restano `N/D` quando il sistema non espone i sensori. Stato assistente e
+TaskRunner arrivano dal runtime. La chat invia testo alla sessione Gemini Live;
+i toggle plugin riflettono il registry reale, salvano la configurazione e
+ricreano la sessione mantenendo il contesto. I pulsanti `DEMO` animano percorsi
+illustrativi e non eseguono azioni. La HUD non modifica audio, dashboard remota,
+avvio automatico o preferenze; questi controlli restano nella UI nativa.
+La visualizzazione 3D richiede Three.js dal CDN, quindi una connessione internet.
+Se la pagina incorporata non si carica, la UI ripristina la HUD Qt nativa.
+
+Per provare solo il ponte senza avviare JARVIS, eseguire
+`python core/hud_bridge.py`: l'HUD mostra le statistiche disponibili e risponde
+alla chat con un'eco demo; in questa modalità i toggle plugin non hanno un
+registry Jarvis collegato.
+
 ## Sicurezza e privacy
 
 - Le chiavi API, i certificati, la memoria lunga e i log locali sono esclusi dal repository.

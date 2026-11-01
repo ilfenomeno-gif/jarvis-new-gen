@@ -84,6 +84,7 @@ from memory.config_manager     import (
 )
 from core.plugin_loader        import discover_plugins
 from core.action_loader        import discover_actions
+from core.hud_bridge           import HudBridge
 from core.intent_router        import route_tool
 from core.geo_router           import classify_and_route
 from core.prompt_router        import PromptRouter
@@ -997,6 +998,55 @@ class JarvisLive:
         self.ui.get_plugins = self._plugin_registry.list_for_ui
         self.ui.get_hud_runtime = self._hud_runtime_snapshot
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
+        self._hud = HudBridge()
+        self._hud.on_message = self._on_hud_message
+        self._hud.on_plugin = self._on_hud_plugin_toggle
+        set_ui_state = self.ui.set_state
+
+        def set_ui_and_hud_state(state: str) -> None:
+            set_ui_state(state)
+            self._hud.set_state(state)
+
+        self.ui.set_state = set_ui_and_hud_state
+
+    def _sync_hud_plugins(self) -> None:
+        plugins = (
+            {"name": item["name"], "active": item["enabled"]}
+            for item in self._plugin_registry.list_for_ui()
+            if item["valid"]
+        )
+        self._hud.set_plugins(plugins)
+
+    def _on_hud_plugin_toggle(self, name: str) -> None:
+        from memory.config_manager import save_plugin_enabled
+
+        plugins = {
+            item["name"]: item
+            for item in self._plugin_registry.list_for_ui()
+            if item["valid"]
+        }
+        plugin = plugins.get(name)
+        if plugin is None:
+            self.ui.write_log(f"ERR: HUD requested unknown plugin: {name}")
+            self._sync_hud_plugins()
+            return
+
+        enabled = not plugin["enabled"]
+        try:
+            save_plugin_enabled(name, enabled)
+        except OSError as exc:
+            self.ui.write_log(f"ERR: Could not update HUD plugin {name}: {exc}")
+            self._sync_hud_plugins()
+            return
+
+        self._sync_hud_plugins()
+        state = "enabled" if enabled else "disabled"
+        self.ui.write_log(f"SYS: HUD plugin {name} {state}.")
+        if self.session is not None:
+            self.request_reconnect(
+                keep_context=True,
+                reason=f"HUD plugin {name} {state}",
+            )
 
     def _hud_runtime_snapshot(self) -> dict:
         from core.jarvis_runtime import get_runtime
@@ -1010,13 +1060,17 @@ class JarvisLive:
             "total": 0,
             "progress": 0,
         }
-        return {
+        snapshot = {
             "skills": {
                 "active": sum(item["status"] == "active" for item in skills),
                 "total": len(skills),
             },
             "task": task,
         }
+        hud = getattr(self, "_hud", None)
+        if hud is not None:
+            hud.set_runtime(snapshot)
+        return snapshot
 
     def accessibility_speak(self, text: str) -> None:
         """Speak a short accessibility status through JARVIS's active session."""
@@ -1269,8 +1323,15 @@ class JarvisLive:
         except (OSError, ValueError) as exc:
             logging.getLogger(__name__).warning("Pattern observation unavailable: %s", exc)
 
-    def _on_text_command(self, text: str):
+    def _on_hud_message(self, text: str) -> None:
+        self._on_text_command(text, from_hud=True)
+
+    def _on_text_command(self, text: str, *, from_hud: bool = False):
+        if not from_hud:
+            self._hud.push_chat("user", text)
         if not self._loop:
+            if from_hud:
+                self._hud.push_chat("system", "Jarvis non è ancora connesso.")
             return
 
         lowered = text.strip().lower()
@@ -1300,6 +1361,8 @@ class JarvisLive:
             return
 
         if not self.session:
+            if from_hud:
+                self._hud.push_chat("system", "Sessione Gemini non disponibile.")
             self.ui.write_log("ERR: Sessione Gemini non disponibile.")
             return
 
@@ -1832,9 +1895,10 @@ class JarvisLive:
             else:
                 asyncio.run_coroutine_threadsafe(dispatch(), loop)
 
-    def set_speaking(self, value: bool):
+    def set_speaking(self, value: bool, level: float | None = None):
         with self._speaking_lock:
             self._is_speaking = value
+        self._hud.set_speaking(value, level=level)
         if value:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
@@ -2901,6 +2965,7 @@ class JarvisLive:
                                 self._recent_user_texts.append(full_in)
                                 self._schedule_geo_route(full_in)
                                 self.ui.write_log(f"You: {full_in}")
+                                self._hud.push_chat("user", full_in)
                                 from core.ui_panels import wants_chat
                                 if wants_chat(full_in):
                                     self.ui.show_gemini_chat()
@@ -2917,6 +2982,7 @@ class JarvisLive:
                             full_out = " ".join(out_buf).strip()
                             if full_out and not local_voice_handled:
                                 self.ui.write_log(f"{self._asst_name}: {full_out}")
+                                self._hud.say(full_out, speak=False)
                                 self._session_log.append(f"{self._asst_name}: {full_out}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
@@ -3022,9 +3088,6 @@ class JarvisLive:
                         self._turn_done_event.clear()
                     continue
 
-                if not self._page_reader_audio_active.is_set():
-                    self.set_speaking(True)
-
                 # Batch all immediately-available chunks into one write to reduce
                 # thread-pool round-trips (was one asyncio.to_thread per 50ms slice).
                 # Cap at ~200 ms so interrupt() still stops audio within ~200 ms.
@@ -3037,9 +3100,12 @@ class JarvisLive:
 
                 # Drive the HUD waveform from JARVIS's own voice while speaking.
                 if not self._page_reader_audio_active.is_set():
+                    level = _pcm_level(
+                        np.frombuffer(bytes(batch), dtype=np.int16)
+                    )
+                    self.set_speaking(True, level=level)
                     try:
-                        self.ui.set_audio_level(_pcm_level(
-                            np.frombuffer(bytes(batch), dtype=np.int16)))
+                        self.ui.set_audio_level(level)
                     except Exception:
                         pass
 
@@ -3368,6 +3434,14 @@ class JarvisLive:
 
     async def run(self):
         self._loop = asyncio.get_event_loop()
+        self._sync_hud_plugins()
+        try:
+            self._hud.start(window="none")
+            self.ui.show_hud_browser(self._hud.url)
+            self.ui.write_log(f"SYS: HUD available at {self._hud.url}")
+        except OSError as exc:
+            self._hud.stop()
+            self.ui.write_log(f"SYS: HUD could not start: {exc}")
         # GEV lifecycle hook
         self._main_task = asyncio.current_task()
         self._reconnect_event = asyncio.Event()
@@ -3595,6 +3669,7 @@ class JarvisLive:
         except KeyboardInterrupt:
             pass
         finally:
+            self._hud.stop()
             try:
                 self.stop_accessibility_hotkeys()
             except RuntimeError as exc:
